@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Photos
+import UIKit
 
 // MARK: - Photo Manager
 
@@ -14,7 +15,6 @@ class PhotoManager: ObservableObject {
     @Published var photosByDate: [Date: [PHAsset]] = [:]
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
     @Published var totalPhotoCount: Int = 0
-    @Published var thumbnailCache: [String: UIImage] = [:]
     @Published var isLoadingMore = false
     
     let monthFormatter: DateFormatter = {
@@ -23,9 +23,28 @@ class PhotoManager: ObservableObject {
         return formatter
     }()
     
-    private let imageManager = PHImageManager.default()
-    // Thumbnail size optimized for calendar cells - reduced for better performance
-    private let thumbnailSize = CGSize(width: 80, height: 80)
+    // Use PHCachingImageManager for better performance
+    private let cachingImageManager = PHCachingImageManager()
+    
+    // NSCache for automatic memory management
+    private let thumbnailCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 500 // Limit number of cached images
+        cache.totalCostLimit = 50 * 1024 * 1024 // 50MB limit
+        return cache
+    }()
+    
+    // Request throttling: limit concurrent thumbnail requests
+    private let requestQueue = DispatchQueue(label: "com.keeprr.thumbnailRequests", qos: .userInitiated)
+    private let requestSemaphore: DispatchSemaphore
+    
+    // Default thumbnail size (will be overridden by targetSize parameter)
+    private let defaultThumbnailSize = CGSize(width: 80, height: 80)
+    
+    init() {
+        // Limit to 10 concurrent thumbnail requests
+        requestSemaphore = DispatchSemaphore(value: 10)
+    }
     
     var loadedPhotoCount = 0
     private var allPhotosFetchResult: PHFetchResult<PHAsset>?
@@ -45,9 +64,6 @@ class PhotoManager: ObservableObject {
         cachedMonthsWithPhotos = months
         return months
     }
-    
-    // Maximum cache size to prevent unbounded growth
-    private let maxCacheSize = 500
     
     func requestAuthorization() {
         let currentStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -185,46 +201,101 @@ class PhotoManager: ObservableObject {
         }
     }
     
-    func loadThumbnail(for asset: PHAsset, completion: @escaping (UIImage?) -> Void) {
-        let cacheKey = asset.localIdentifier
+    func loadThumbnail(for asset: PHAsset, targetSize: CGSize? = nil, completion: @escaping (UIImage?) -> Void) {
+        let cacheKey = asset.localIdentifier as NSString
+        let size = targetSize ?? defaultThumbnailSize
         
         // Check cache first
-        if let cachedImage = thumbnailCache[cacheKey] {
+        if let cachedImage = thumbnailCache.object(forKey: cacheKey) {
             completion(cachedImage)
             return
         }
         
-        // Enforce cache size limit - remove oldest entries if needed
-        if thumbnailCache.count >= maxCacheSize {
-            // Remove 20% of oldest entries (simple FIFO approach)
-            let keysToRemove = Array(thumbnailCache.keys.prefix(maxCacheSize / 5))
-            for key in keysToRemove {
-                thumbnailCache.removeValue(forKey: key)
-            }
-        }
-        
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-        options.isSynchronous = false
-        // Use low quality for faster loading
-        options.isNetworkAccessAllowed = false
-        
-        imageManager.requestImage(
-            for: asset,
-            targetSize: thumbnailSize,
-            contentMode: .aspectFill,
-            options: options
-        ) { [weak self] image, _ in
-            if let image = image {
-                DispatchQueue.main.async {
-                    self?.thumbnailCache[cacheKey] = image
-                    completion(image)
-                }
-            } else {
+        // Throttle requests using semaphore
+        requestQueue.async { [weak self] in
+            guard let self = self else {
                 completion(nil)
+                return
+            }
+            
+            // Wait for available slot (non-blocking with timeout)
+            let waitResult = self.requestSemaphore.wait(timeout: .now() + 0.1)
+            guard waitResult == .success else {
+                // Timeout - skip this request to avoid blocking
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
+                return
+            }
+            
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .opportunistic // Fast low-res first, then better quality
+            options.resizeMode = .fast
+            options.isSynchronous = false
+            options.isNetworkAccessAllowed = false
+            
+            // Scale size for actual request (targetSize is in points)
+            let scale = UIScreen.main.scale
+            let scaledSize = CGSize(width: size.width * scale, height: size.height * scale)
+            
+            // Calculate cost for cache (approximate memory size)
+            let pixelCount = Int(scaledSize.width * scaledSize.height)
+            let cost = pixelCount * 4 // 4 bytes per pixel (RGBA)
+            
+            self.cachingImageManager.requestImage(
+                for: asset,
+                targetSize: scaledSize,
+                contentMode: .aspectFill,
+                options: options
+            ) { [weak self] image, _ in
+                // Release semaphore
+                self?.requestSemaphore.signal()
+                
+                if let image = image {
+                    DispatchQueue.main.async {
+                        // Cache the image
+                        self?.thumbnailCache.setObject(image, forKey: cacheKey, cost: cost)
+                        completion(image)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        completion(nil)
+                    }
+                }
             }
         }
+    }
+    
+    // Preheat thumbnails for visible assets (for smooth scrolling)
+    // targetSize should be in points (will be scaled internally)
+    func startCachingThumbnails(for assets: [PHAsset], targetSize: CGSize) {
+        guard !assets.isEmpty else { return }
+        
+        let scale = UIScreen.main.scale
+        let scaledSize = CGSize(width: targetSize.width * scale, height: targetSize.height * scale)
+        
+        cachingImageManager.startCachingImages(
+            for: assets,
+            targetSize: scaledSize,
+            contentMode: .aspectFill,
+            options: nil
+        )
+    }
+    
+    // Stop caching for assets that are no longer visible
+    // targetSize should be in points (will be scaled internally)
+    func stopCachingThumbnails(for assets: [PHAsset], targetSize: CGSize) {
+        guard !assets.isEmpty else { return }
+        
+        let scale = UIScreen.main.scale
+        let scaledSize = CGSize(width: targetSize.width * scale, height: targetSize.height * scale)
+        
+        cachingImageManager.stopCachingImages(
+            for: assets,
+            targetSize: scaledSize,
+            contentMode: .aspectFill,
+            options: nil
+        )
     }
     
     func deletePhoto(_ asset: PHAsset) {
@@ -246,7 +317,7 @@ class PhotoManager: ObservableObject {
                             }
                         }
                     }
-                    self?.thumbnailCache.removeValue(forKey: asset.localIdentifier)
+                    self?.thumbnailCache.removeObject(forKey: asset.localIdentifier as NSString)
                     self?.totalPhotoCount = max(0, self?.totalPhotoCount ?? 0 - 1)
                     // Invalidate months cache
                     self?.cachedMonthsWithPhotos = nil

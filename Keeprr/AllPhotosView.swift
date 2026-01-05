@@ -44,7 +44,7 @@ struct AllPhotosView: View {
     
     private var photosScrollView: some View {
         ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     calendarViews
                     
                     // Loading indicator at bottom when loading more photos
@@ -304,7 +304,7 @@ struct CalendarMonthView: View {
                 ForEach(0..<firstDayOfMonth, id: \.self) { index in
                     Color.clear
                         .aspectRatio(1, contentMode: .fit)
-                        .id("empty-\(index)")
+                        .id("\(monthStart.timeIntervalSince1970)-empty-\(index)")
                 }
                 
                 // Days of the month (only show up to today for current month)
@@ -320,7 +320,7 @@ struct CalendarMonthView: View {
                         photoManager: photoManager,
                         onPhotoTap: onPhotoTap
                     )
-                    .id("day-\(day)")
+                    .id("\(monthStart.timeIntervalSince1970)-\(day)")
                 }
             }
             .padding(.horizontal, 20)
@@ -338,8 +338,6 @@ struct CalendarDayCell: View {
     let onPhotoTap: (PHAsset, Int) -> Void
     
     @State private var thumbnail: UIImage?
-    @State private var isPulsating = false
-    @State private var pulsationTimer: Timer?
     
     var hasPhotos: Bool {
         !photos.isEmpty
@@ -357,7 +355,7 @@ struct CalendarDayCell: View {
                                 .scaledToFill()
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                         } else {
-                            // Loading state - show blurred placeholder with pulsation
+                            // Loading state - show static placeholder
                             ZStack {
                                 Color.gray.opacity(0.2)
                                 ProgressView()
@@ -365,31 +363,12 @@ struct CalendarDayCell: View {
                             }
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .onAppear {
-                                loadThumbnail()
+                                loadThumbnail(targetSize: geometry.size)
                             }
                         }
                     }
                     .clipped()
                     .cornerRadius(8)
-                    .blur(radius: thumbnail == nil ? 10 : 0)
-                    .opacity(thumbnail == nil ? 0.6 : 1.0)
-                    .scaleEffect(thumbnail == nil ? (isPulsating ? 0.95 : 1.0) : 1.0)
-                    .onAppear {
-                        if thumbnail == nil {
-                            startPulsation()
-                        }
-                    }
-                    .onChange(of: thumbnail) { oldValue, newValue in
-                        if newValue != nil {
-                            stopPulsation()
-                        }
-                    }
-                    .animation(
-                        thumbnail == nil
-                            ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
-                            : .easeOut(duration: 0.3),
-                        value: isPulsating
-                    )
                     .overlay(
                         // Photo count badge
                         Group {
@@ -469,54 +448,14 @@ struct CalendarDayCell: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .onDisappear {
-            pulsationTimer?.invalidate()
-            pulsationTimer = nil
-        }
     }
     
-    private func loadThumbnail() {
+    private func loadThumbnail(targetSize: CGSize) {
         guard let firstPhoto = photos.first else { return }
         
-        // Check cache first before starting animation
-        let cacheKey = firstPhoto.localIdentifier
-        if let cachedImage = photoManager.thumbnailCache[cacheKey] {
-            thumbnail = cachedImage
-            return
-        }
-        
-        startPulsation()
-        
-        photoManager.loadThumbnail(for: firstPhoto) { image in
+        // PhotoManager handles cache checking internally
+        photoManager.loadThumbnail(for: firstPhoto, targetSize: targetSize) { image in
             thumbnail = image
-            stopPulsation()
-        }
-    }
-    
-    private func startPulsation() {
-        guard thumbnail == nil else { return }
-        isPulsating = true
-        
-        // Stop any existing timer
-        pulsationTimer?.invalidate()
-        
-        // Create a timer to toggle pulsation
-        pulsationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            if self.thumbnail == nil {
-                withAnimation(.easeInOut(duration: 1.0)) {
-                    self.isPulsating.toggle()
-                }
-            } else {
-                self.stopPulsation()
-            }
-        }
-    }
-    
-    private func stopPulsation() {
-        pulsationTimer?.invalidate()
-        pulsationTimer = nil
-        withAnimation(.easeOut(duration: 0.3)) {
-            isPulsating = false
         }
     }
 }
