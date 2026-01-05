@@ -400,6 +400,9 @@
 				DEVELOPMENT_TEAM = ZYW3PQ9PT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Keeprr needs access to your camera to take photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Keeprr needs access to save photos to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Keeprr needs access to your photo library to display your photos in a calendar view.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -428,6 +431,9 @@
 				DEVELOPMENT_TEAM = ZYW3PQ9PT6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Keeprr needs access to your camera to take photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Keeprr needs access to save photos to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Keeprr needs access to your photo library to display your photos in a calendar view.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
