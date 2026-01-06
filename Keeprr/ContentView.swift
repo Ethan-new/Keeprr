@@ -8,10 +8,10 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selectedTab = 0
+    @ObservedObject private var appState = AppState.shared
     
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $appState.selectedTab) {
             HomeView()
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
@@ -30,7 +30,7 @@ struct ContentView: View {
                 }
                 .tag(2)
             
-            CameraView(selectedTab: $selectedTab)
+            CameraView(selectedTab: $appState.selectedTab)
                 .tabItem {
                     Label("Camera", systemImage: "camera.fill")
                 }
@@ -53,6 +53,21 @@ struct HomeView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                         .padding(.bottom, 4)
+
+                    Button {
+                        NotificationManager.shared.scheduleTestPrompt(inSeconds: 60)
+                    } label: {
+                        HStack {
+                            Image(systemName: "bell.badge.fill")
+                            Text("Test Notification (1 min)")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .padding(.bottom, 8)
                     
                     if momentStore.moments.isEmpty {
                         Text("No moments yet.")
@@ -79,6 +94,17 @@ struct HomeView: View {
                 .padding()
             }
             .navigationTitle("Home")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .accessibilityLabel("Settings")
+                    }
+                }
+            }
         }
     }
 }

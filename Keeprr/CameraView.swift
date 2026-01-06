@@ -33,6 +33,11 @@ struct CameraView: View {
     @State private var zoomFactorFront: CGFloat = 1.0
     @State private var hasUltraWide: Bool = false
     
+    private var isUserZoomEnabled: Bool {
+        // During the 2-photo capture flow (especially after the auto switch), lock zoom.
+        !isCapturing && !showCountdown && !shouldCaptureSecondPhoto
+    }
+    
     init(selectedTab: Binding<Int>) {
         self._selectedTab = selectedTab
     }
@@ -65,7 +70,11 @@ struct CameraView: View {
                     shouldCaptureSecondPhoto: $shouldCaptureSecondPhoto,
                     zoomFactorBack: $zoomFactorBack,
                     zoomFactorFront: $zoomFactorFront,
-                    hasUltraWide: $hasUltraWide
+                    hasUltraWide: $hasUltraWide,
+                    isUserZoomEnabled: Binding(
+                        get: { isUserZoomEnabled },
+                        set: { _ in }
+                    )
                 )
                 
                 // Countdown overlay
@@ -182,6 +191,8 @@ struct CameraView: View {
         .padding(.horizontal, 12)
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
+        .allowsHitTesting(isUserZoomEnabled)
+        .opacity(isUserZoomEnabled ? 1.0 : 0.45)
     }
 }
 
@@ -202,10 +213,12 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
     @Binding var zoomFactorBack: CGFloat
     @Binding var zoomFactorFront: CGFloat
     @Binding var hasUltraWide: Bool
+    @Binding var isUserZoomEnabled: Bool
     
     func makeUIViewController(context: Context) -> SingleCameraController {
         let controller = SingleCameraController()
         controller.isFront = isFront
+        controller.isUserZoomEnabled = isUserZoomEnabled
         let coordinator1 = Coordinator1(self, controller: controller)
         let coordinator2 = Coordinator2(self, controller: controller)
         controller.delegate1 = coordinator1
@@ -220,6 +233,8 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ cameraViewController: SingleCameraController, context: Context) {
+        cameraViewController.isUserZoomEnabled = isUserZoomEnabled
+        
         if didTapCapture {
             // Immediately reset to prevent multiple triggers
             didTapCapture = false
@@ -227,6 +242,9 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
             // Create callbacks and pass directly to controller
             let firstPhotoCallback: () -> Void = {
                 // First photo taken, switch preview camera and start countdown
+                // When switching to the other side for the second photo: force zoom out and lock user zoom.
+                zoomFactorBack = hasUltraWide ? 0.5 : 1.0
+                zoomFactorFront = 1.0
                 isFront.toggle() // Only for preview UI
                 showCountdown = true
                 countdown = 3
@@ -268,6 +286,8 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
         
         if shouldCaptureSecondPhoto {
             // Explicitly capture back second (guaranteed to be different camera)
+            // Ensure the second (back) capture is always fully zoomed out (0.5× if ultra-wide exists).
+            zoomFactorBack = hasUltraWide ? 0.5 : 1.0
             cameraViewController.captureBack()
             shouldCaptureSecondPhoto = false
         }
@@ -431,6 +451,9 @@ final class SingleCameraController: UIViewController, AVCaptureVideoDataOutputSa
     
     var onFirstPhotoComplete: (() -> Void)?
     var onSecondPhotoComplete: (() -> Void)?
+
+    /// Controls whether the user can change zoom (pinch). Programmatic zoom updates still apply.
+    var isUserZoomEnabled: Bool = true
     
     // Zoom state
     private var pinchStartZoom: CGFloat = 1.0
@@ -741,6 +764,7 @@ final class SingleCameraController: UIViewController, AVCaptureVideoDataOutputSa
     }
     
     @objc private func handlePinch(_ gr: UIPinchGestureRecognizer) {
+        guard isUserZoomEnabled else { return }
         let isPreviewFront = isFront
         
         switch gr.state {

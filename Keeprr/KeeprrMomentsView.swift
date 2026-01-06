@@ -500,6 +500,10 @@ private struct MomentPageView: View {
     @State private var frontImage: UIImage?
     @State private var isLoading = true
     @State private var loadFailed = false
+    @State private var isSwapped = false
+    @State private var overlayOffset: CGSize = .zero
+    @State private var overlayDragTranslation: CGSize = .zero
+    @State private var canSwap = true
     
     private var backAsset: PHAsset? {
         momentsManager.getAssets(for: moment.id).back
@@ -520,27 +524,85 @@ private struct MomentPageView: View {
                         .foregroundColor(.white)
                 }
             } else if let backImage {
-                ZStack(alignment: .bottomTrailing) {
-                    Image(uiImage: backImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                GeometryReader { geo in
+                    let container = geo.size
+                    let baseImage: UIImage = (isSwapped ? (frontImage ?? backImage) : backImage)
+                    let overlayImage: UIImage? = (isSwapped ? backImage : frontImage)
                     
-                    if let frontImage {
-                        Image(uiImage: frontImage)
+                    let imgSize = baseImage.size
+                    let safeW = max(imgSize.width, CGFloat(1))
+                    let safeH = max(imgSize.height, CGFloat(1))
+                    let scale = min(container.width / safeW, container.height / safeH)
+                    let fitted = CGSize(width: imgSize.width * scale, height: imgSize.height * scale)
+                    
+                    // Keep the overlay within the displayed back-photo frame (account for padding).
+                    let overlayPaddingX: CGFloat = 18
+                    let overlayPaddingY: CGFloat = 24
+                    let overlayMaxWidth = max(CGFloat(0), fitted.width - (overlayPaddingX * 2))
+                    let overlayMaxHeight = max(CGFloat(0), fitted.height - (overlayPaddingY * 2))
+                    let overlayWidth = min(CGFloat(140), overlayMaxWidth)
+                    let overlayHeight = min(CGFloat(190), overlayMaxHeight)
+
+                    let currentOverlayOffset = clampedOverlayOffset(
+                        raw: CGSize(
+                            width: overlayOffset.width + overlayDragTranslation.width,
+                            height: overlayOffset.height + overlayDragTranslation.height
+                        ),
+                        fitted: fitted,
+                        overlaySize: CGSize(width: overlayWidth, height: overlayHeight),
+                        paddingX: overlayPaddingX,
+                        paddingY: overlayPaddingY
+                    )
+                    
+                    // Important: Keep overlays *within the displayed back photo bounds*
+                    ZStack(alignment: .topLeading) {
+                        Image(uiImage: baseImage)
                             .resizable()
-                            .scaledToFill()
-                            .frame(width: 140, height: 190)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: fitted.width, height: fitted.height)
                             .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                            )
-                            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
-                            .padding(.trailing, 18)
-                            .padding(.bottom, 24)
+                        
+                        if let overlayImage {
+                            Image(uiImage: overlayImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: overlayWidth, height: overlayHeight)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                                )
+                                .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+                                .offset(
+                                    x: overlayPaddingX + currentOverlayOffset.width,
+                                    y: overlayPaddingY + currentOverlayOffset.height
+                                )
+                                .onTapGesture {
+                                    // Only swap if we actually have both photos loaded.
+                                    guard frontImage != nil, canSwap else { return }
+                                    canSwap = false
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                        isSwapped.toggle()
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                        canSwap = true
+                                    }
+                                }
+                                .gesture(
+                                    DragGesture(minimumDistance: 2)
+                                        .onChanged { value in
+                                            overlayDragTranslation = value.translation
+                                        }
+                                        .onEnded { _ in
+                                            overlayOffset = currentOverlayOffset
+                                            overlayDragTranslation = .zero
+                                        }
+                                )
+                        }
                     }
+                    .frame(width: fitted.width, height: fitted.height)
+                    .position(x: container.width / 2, y: container.height / 2)
                 }
             } else if loadFailed {
                 VStack(spacing: 20) {
@@ -569,6 +631,10 @@ private struct MomentPageView: View {
         loadFailed = false
         backImage = nil
         frontImage = nil
+        isSwapped = false
+        overlayOffset = .zero
+        overlayDragTranslation = .zero
+        canSwap = true
         
         guard let backAsset, let frontAsset else {
             isLoading = false
@@ -603,6 +669,25 @@ private struct MomentPageView: View {
                 loadFailed = true
             }
         }
+    }
+
+    private func clampedOverlayOffset(
+        raw: CGSize,
+        fitted: CGSize,
+        overlaySize: CGSize,
+        paddingX: CGFloat,
+        paddingY: CGFloat
+    ) -> CGSize {
+        // We place the overlay at (padding + offset). Clamp so the overlay stays within [0..fitted - overlaySize].
+        let minX = -paddingX
+        let maxX = max(CGFloat(0), fitted.width - overlaySize.width - paddingX)
+        let minY = -paddingY
+        let maxY = max(CGFloat(0), fitted.height - overlaySize.height - paddingY)
+
+        return CGSize(
+            width: min(max(raw.width, minX), maxX),
+            height: min(max(raw.height, minY), maxY)
+        )
     }
 }
 
