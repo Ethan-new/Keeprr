@@ -2,4 +2,12 @@
 DerivedData/
 derivedData/
 
+# Xcode user-specific settings / UI state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS
+.DS_Store
+
 
