@@ -12,8 +12,13 @@ import Photos
 
 struct AllPhotosView: View {
     @StateObject private var photoManager = PhotoManager()
-    @State private var selectedPhoto: PHAsset?
-    @State private var showPhotoModal = false
+    
+    private struct SelectedAsset: Identifiable {
+        let asset: PHAsset
+        var id: String { asset.localIdentifier }
+    }
+    
+    @State private var selectedAsset: SelectedAsset?
     
     var body: some View {
         NavigationView {
@@ -23,8 +28,8 @@ struct AllPhotosView: View {
                 .onAppear {
                     photoManager.requestAuthorization()
                 }
-                .fullScreenCover(isPresented: $showPhotoModal) {
-                    photoModalView
+                .fullScreenCover(item: $selectedAsset) { selected in
+                    photoModalView(for: selected.asset)
                 }
         }
     }
@@ -150,43 +155,21 @@ struct AllPhotosView: View {
         }
     }
     
-    @ViewBuilder
-    private var photoModalView: some View {
-        if let photo = selectedPhoto {
-            let dayPhotos = getDayPhotos(for: photo)
-            // Ensure we always have at least the selected photo
-            let safeDayPhotos = dayPhotos.isEmpty ? [photo] : dayPhotos
-            let actualIndex = safeDayPhotos.firstIndex(where: { $0.localIdentifier == photo.localIdentifier }) ?? 0
-            
-            PhotoViewerModal(
-                photo: photo,
-                dayPhotos: safeDayPhotos,
-                currentIndex: actualIndex,
-                onDelete: {
-                    photoManager.deletePhoto($0)
-                    showPhotoModal = false
-                }
-            )
-        } else {
-            // Fallback if photo is nil - this shouldn't happen but handle it gracefully
-            ZStack {
-                Color.black.ignoresSafeArea()
-                VStack(spacing: 20) {
-                    Text("Unable to load photo")
-                        .foregroundColor(.white)
-                        .font(.headline)
-                    Text("Please try again")
-                        .foregroundColor(.white.opacity(0.7))
-                    Button("Close") {
-                        showPhotoModal = false
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.white.opacity(0.2))
-                    .cornerRadius(10)
-                }
+    private func photoModalView(for photo: PHAsset) -> some View {
+        let dayPhotos = getDayPhotos(for: photo)
+        // Ensure we always have at least the selected photo
+        let safeDayPhotos = dayPhotos.isEmpty ? [photo] : dayPhotos
+        let actualIndex = safeDayPhotos.firstIndex(where: { $0.localIdentifier == photo.localIdentifier }) ?? 0
+        
+        return PhotoViewerModal(
+            photo: photo,
+            dayPhotos: safeDayPhotos,
+            currentIndex: actualIndex,
+            onDelete: {
+                photoManager.deletePhoto($0)
+                selectedAsset = nil
             }
-        }
+        )
     }
     
     private func getDayPhotos(for photo: PHAsset) -> [PHAsset] {
@@ -219,8 +202,7 @@ struct AllPhotosView: View {
     }
     
     private func handlePhotoTap(photo: PHAsset, index: Int) {
-        selectedPhoto = photo
-        showPhotoModal = true
+        selectedAsset = SelectedAsset(asset: photo)
     }
     
     private func openSettings() {
@@ -472,6 +454,7 @@ struct PhotoViewerModal: View {
     @State private var currentPhotoIndex: Int
     @State private var showDeleteAlert = false
     @State private var images: [String: UIImage] = [:] // Use asset ID as key
+    @State private var failedImageIds: Set<String> = []
     
     private let imageManager = PHImageManager.default()
     
@@ -505,6 +488,23 @@ struct PhotoViewerModal: View {
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if failedImageIds.contains(asset.localIdentifier) {
+                                VStack(spacing: 12) {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .font(.system(size: 44))
+                                        .foregroundColor(.white.opacity(0.8))
+                                    Text("Failed to load image")
+                                        .foregroundColor(.white)
+                                    Button("Retry") {
+                                        failedImageIds.remove(asset.localIdentifier)
+                                        loadFullImage(for: asset)
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(Color.white.opacity(0.2))
+                                    .cornerRadius(10)
+                                }
                             } else {
                                 VStack(spacing: 20) {
                                     ProgressView()
@@ -629,12 +629,13 @@ struct PhotoViewerModal: View {
     
     private func loadFullImage(for asset: PHAsset) {
         let assetId = asset.localIdentifier
-        guard images[assetId] == nil else { return }
+        guard images[assetId] == nil, !failedImageIds.contains(assetId) else { return }
         
         let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
+        options.deliveryMode = .opportunistic
         options.resizeMode = .none
         options.isSynchronous = false
+        options.isNetworkAccessAllowed = true
         
         // Request full resolution image (use a very large size to get full quality)
         let screenSize = UIScreen.main.bounds.size
@@ -646,10 +647,21 @@ struct PhotoViewerModal: View {
             targetSize: targetSize,
             contentMode: .aspectFit,
             options: options
-        ) { image, _ in
-            if let image = image {
-                DispatchQueue.main.async {
+        ) { image, info in
+            let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+            let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+            let error = info?[PHImageErrorKey] as? Error
+            
+            DispatchQueue.main.async {
+                if let image {
                     images[assetId] = image
+                    failedImageIds.remove(assetId)
+                } else if !isDegraded && !isCancelled {
+                    // Only mark as failed for a final (non-degraded) result.
+                    failedImageIds.insert(assetId)
+                    if let error {
+                        print("Failed to load full image for \(assetId): \(error)")
+                    }
                 }
             }
         }
