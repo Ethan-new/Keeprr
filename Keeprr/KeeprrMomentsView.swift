@@ -504,6 +504,8 @@ private struct MomentPageView: View {
     @State private var overlayOffset: CGSize = .zero
     @State private var overlayDragTranslation: CGSize = .zero
     @State private var canSwap = true
+    @GestureState private var isPressingBaseImage = false
+    @State private var activeLoadToken = UUID()
     
     private var backAsset: PHAsset? {
         momentsManager.getAssets(for: moment.id).back
@@ -517,13 +519,8 @@ private struct MomentPageView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if isLoading && !loadFailed {
-                VStack(spacing: 20) {
-                    ProgressView().tint(.white)
-                    Text("Loading moment...")
-                        .foregroundColor(.white)
-                }
-            } else if let backImage {
+            // Prefer showing the last-rendered image during paging to avoid a spinner flash.
+            if let backImage {
                 GeometryReader { geo in
                     let container = geo.size
                     let baseImage: UIImage = (isSwapped ? (frontImage ?? backImage) : backImage)
@@ -561,6 +558,20 @@ private struct MomentPageView: View {
                             .aspectRatio(contentMode: .fit)
                             .frame(width: fitted.width, height: fitted.height)
                             .clipped()
+                            .simultaneousGesture(
+                                // Hide overlay only after a true hold (prevents accidental hides while paging),
+                                // and keep it hidden until finger-up even if the finger moves a bit.
+                                LongPressGesture(minimumDuration: 0.5, maximumDistance: 10)
+                                    .sequenced(before: DragGesture(minimumDistance: 0))
+                                    .updating($isPressingBaseImage) { value, state, _ in
+                                        switch value {
+                                        case .second(true, _):
+                                            state = true
+                                        default:
+                                            state = false
+                                        }
+                                    }
+                            )
                         
                         if let overlayImage {
                             Image(uiImage: overlayImage)
@@ -574,6 +585,8 @@ private struct MomentPageView: View {
                                         .stroke(Color.white.opacity(0.8), lineWidth: 2)
                                 )
                                 .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+                                .opacity(isPressingBaseImage ? 0 : 1)
+                                .animation(.easeInOut(duration: 0.15), value: isPressingBaseImage)
                                 .offset(
                                     x: overlayPaddingX + currentOverlayOffset.width,
                                     y: overlayPaddingY + currentOverlayOffset.height
@@ -604,6 +617,16 @@ private struct MomentPageView: View {
                     .frame(width: fitted.width, height: fitted.height)
                     .position(x: container.width / 2, y: container.height / 2)
                 }
+                .overlay {
+                    // Only show the spinner if we have nothing rendered yet.
+                    if isLoading && backImage == nil && !loadFailed {
+                        VStack(spacing: 12) {
+                            ProgressView().tint(.white)
+                            Text("Loading moment...")
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
             } else if loadFailed {
                 VStack(spacing: 20) {
                     Image(systemName: "exclamationmark.triangle")
@@ -615,6 +638,12 @@ private struct MomentPageView: View {
                     Text("The image may have been deleted")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
+                }
+            } else if isLoading {
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text("Loading moment...")
+                        .foregroundColor(.white)
                 }
             }
         }
@@ -629,12 +658,13 @@ private struct MomentPageView: View {
     private func loadMomentImages() {
         isLoading = true
         loadFailed = false
-        backImage = nil
-        frontImage = nil
         isSwapped = false
         overlayOffset = .zero
         overlayDragTranslation = .zero
         canSwap = true
+        
+        let loadToken = UUID()
+        activeLoadToken = loadToken
         
         guard let backAsset, let frontAsset else {
             isLoading = false
@@ -659,6 +689,7 @@ private struct MomentPageView: View {
         }
         
         group.notify(queue: .main) {
+            guard activeLoadToken == loadToken else { return }
             if let loadedBack {
                 backImage = loadedBack
                 frontImage = loadedFront
