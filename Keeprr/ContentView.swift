@@ -30,7 +30,7 @@ struct ContentView: View {
                 }
                 .tag(2)
             
-            CameraView()
+            CameraView(selectedTab: $selectedTab)
                 .tabItem {
                     Label("Camera", systemImage: "camera.fill")
                 }
@@ -43,15 +43,40 @@ struct ContentView: View {
 // MARK: - Tab Views
 
 struct HomeView: View {
+    @ObservedObject private var momentStore = MomentStore.shared
+    
     var body: some View {
         NavigationView {
-            VStack {
-                Image(systemName: "house.fill")
-                    .imageScale(.large)
-                    .foregroundStyle(.tint)
-                Text("Home")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Moments (\(momentStore.moments.count))")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .padding(.bottom, 4)
+                    
+                    if momentStore.moments.isEmpty {
+                        Text("No moments yet.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(momentStore.moments) { moment in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("id: \(moment.id)")
+                                Text("createdAt: \(moment.createdAt.formatted(date: .long, time: .standard))")
+                                Text("frontAssetId: \(moment.frontAssetId)")
+                                Text("backAssetId: \(moment.backAssetId)")
+                            }
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.secondary.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+                    
+                    Spacer(minLength: 24)
+                }
+                .padding()
             }
             .navigationTitle("Home")
         }

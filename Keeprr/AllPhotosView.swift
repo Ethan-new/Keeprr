@@ -163,7 +163,7 @@ struct AllPhotosView: View {
                 dayPhotos: safeDayPhotos,
                 currentIndex: actualIndex,
                 onDelete: {
-                    photoManager.deletePhoto(photo)
+                    photoManager.deletePhoto($0)
                     showPhotoModal = false
                 }
             )
@@ -466,7 +466,7 @@ struct PhotoViewerModal: View {
     let photo: PHAsset
     let dayPhotos: [PHAsset] // Photos from the same day, sorted chronologically
     let currentIndex: Int
-    let onDelete: () -> Void
+    let onDelete: (PHAsset) -> Void
     
     @Environment(\.dismiss) var dismiss
     @State private var currentPhotoIndex: Int
@@ -475,7 +475,7 @@ struct PhotoViewerModal: View {
     
     private let imageManager = PHImageManager.default()
     
-    init(photo: PHAsset, dayPhotos: [PHAsset], currentIndex: Int, onDelete: @escaping () -> Void) {
+    init(photo: PHAsset, dayPhotos: [PHAsset], currentIndex: Int, onDelete: @escaping (PHAsset) -> Void) {
         self.photo = photo
         self.dayPhotos = dayPhotos
         self.currentIndex = currentIndex
@@ -615,7 +615,11 @@ struct PhotoViewerModal: View {
         .alert("Delete Photo", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
-                onDelete()
+                if let assetToDelete = dayPhotos[safe: currentPhotoIndex] {
+                    onDelete(assetToDelete)
+                } else {
+                    onDelete(photo)
+                }
                 dismiss()
             }
         } message: {

@@ -6,14 +6,604 @@
 //
 
 import SwiftUI
+import Photos
 
 // MARK: - Keeprr Moments View
 
 struct KeeprrMomentsView: View {
+    @StateObject private var momentsManager = KeeprrMomentsManager()
+    @State private var selectedMoment: Moment?
+    
     var body: some View {
         NavigationView {
-            Color.clear
-                .navigationTitle("Keeprr Moments")
+            contentView
+                .navigationTitle("Keeprr Moments (\(momentsManager.moments.count))")
+                .navigationBarTitleDisplayMode(.inline)
+                .fullScreenCover(item: $selectedMoment) { moment in
+                    MomentDetailView(moment: moment, momentsManager: momentsManager)
+                }
+                .onAppear {
+                    // Ensure we request photo permissions and load assets the first time this tab is opened.
+                    momentsManager.requestAuthorization()
+                }
+        }
+    }
+    
+    @ViewBuilder
+    private var contentView: some View {
+        if momentsManager.authorizationStatus == .denied || momentsManager.authorizationStatus == .restricted {
+            permissionDeniedView
+        } else if momentsManager.authorizationStatus == .notDetermined {
+            loadingView
+        } else if momentsManager.isLoading && momentsManager.moments.isEmpty {
+            loadingView
+        } else if momentsManager.moments.isEmpty {
+            emptyStateView
+        } else {
+            momentsCalendarView
+        }
+    }
+    
+    private var loadingView: some View {
+        VStack {
+            ProgressView()
+            Text("Loading moments...")
+                .foregroundColor(.secondary)
+                .padding(.top, 10)
+        }
+    }
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundColor(.gray)
+            Text("No Moments Yet")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("Capture your first Keeprr moment using the camera tab. Moments are created when you take both front and back photos.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+        }
+    }
+    
+    private var permissionDeniedView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 60))
+                .foregroundColor(.gray)
+            Text("Photo Access Required")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("Keeprr needs access to your photo library to load your moments.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 40)
+            Button(action: openSettings) {
+                Text("Open Settings")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+            .padding(.top, 20)
+        }
+    }
+    
+    private func openSettings() {
+        if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(settingsUrl)
+        }
+    }
+    
+    private var momentsCalendarView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                calendarViews
+            }
+            .scrollDismissesKeyboard(.never)
+        }
+    }
+    
+    @ViewBuilder
+    private var calendarViews: some View {
+        // Show all loaded months, newest first (at top)
+        let allMonths = Array(momentsManager.monthsWithMoments)
+        
+        if allMonths.isEmpty {
+            EmptyView()
+        } else {
+            ForEach(Array(allMonths.enumerated()), id: \.element) { index, monthYear in
+                MomentsCalendarMonthView(
+                    monthYear: monthYear,
+                    momentsByDate: momentsManager.momentsByDate,
+                    monthFormatter: momentsManager.monthFormatter,
+                    onMomentTap: handleMomentTap,
+                    momentsManager: momentsManager
+                )
+                .padding(.bottom, 30)
+                .id("month-\(monthYear.timeIntervalSince1970)")
+            }
+        }
+    }
+    
+    private func handleMomentTap(moment: Moment) {
+        selectedMoment = moment
+    }
+}
+
+// MARK: - Moments Calendar Month View
+
+struct MomentsCalendarMonthView: View {
+    let monthYear: Date
+    let momentsByDate: [Date: [Moment]]
+    let monthFormatter: DateFormatter
+    let onMomentTap: (Moment) -> Void
+    @ObservedObject var momentsManager: KeeprrMomentsManager
+    
+    private var calendar: Calendar {
+        Calendar.current
+    }
+    
+    private var monthStart: Date {
+        let components = calendar.dateComponents([.year, .month], from: monthYear)
+        let date = calendar.date(from: components)!
+        return calendar.startOfDay(for: date)
+    }
+    
+    private var firstDayOfMonth: Int {
+        let components = calendar.dateComponents([.weekday], from: monthStart)
+        // Calendar.weekday: 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+        // Convert to Sunday = 0, Monday = 1, etc.
+        let weekday = components.weekday!
+        // Ensure we get 0-6 range (Sunday = 0)
+        return (weekday - 1) % 7
+    }
+    
+    private var daysInMonth: Int {
+        calendar.range(of: .day, in: .month, for: monthStart)?.count ?? 0
+    }
+    
+    private var isFirstMonth: Bool {
+        let currentMonth = calendar.dateComponents([.year, .month], from: Date())
+        let viewMonth = calendar.dateComponents([.year, .month], from: monthYear)
+        return currentMonth.year == viewMonth.year && currentMonth.month == viewMonth.month
+    }
+    
+    private var maxDayToShow: Int {
+        if isFirstMonth {
+            // For current month, only show days up to today
+            return calendar.component(.day, from: Date())
+        } else {
+            // For past months, show all days
+            return daysInMonth
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Month header - always show
+            Text(monthFormatter.string(from: monthYear))
+                .font(.system(size: 20, weight: .bold))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            
+            // Day labels - always show
+            HStack(spacing: 0) {
+                ForEach(["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], id: \.self) { day in
+                    Text(day)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+            
+            // Calendar grid
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
+                // Empty cells for days before month starts
+                ForEach(0..<firstDayOfMonth, id: \.self) { index in
+                    Color.clear
+                        .aspectRatio(1, contentMode: .fit)
+                        .id("\(monthStart.timeIntervalSince1970)-empty-\(index)")
+                }
+                
+                // Days of the month (only show up to today for current month)
+                ForEach(1...maxDayToShow, id: \.self) { day in
+                    let dayDate = calendar.date(byAdding: .day, value: day - 1, to: monthStart)!
+                    let dayStart = calendar.startOfDay(for: dayDate)
+                    let isToday = calendar.isDateInToday(dayDate)
+                    
+                    MomentsCalendarDayCell(
+                        day: day,
+                        moments: momentsByDate[dayStart] ?? [],
+                        isToday: isToday,
+                        momentsManager: momentsManager,
+                        onMomentTap: onMomentTap
+                    )
+                    .id("\(monthStart.timeIntervalSince1970)-\(day)")
+                }
+            }
+            .padding(.horizontal, 20)
         }
     }
 }
+
+// MARK: - Moments Calendar Day Cell
+
+struct MomentsCalendarDayCell: View {
+    let day: Int
+    let moments: [Moment]
+    let isToday: Bool
+    @ObservedObject var momentsManager: KeeprrMomentsManager
+    let onMomentTap: (Moment) -> Void
+    
+    @State private var thumbnail: UIImage?
+    @State private var loadFailed = false
+    
+    // Filter moments to only those with valid assets
+    private var validMoments: [Moment] {
+        moments.filter { moment in
+            let assets = momentsManager.getAssets(for: moment.id)
+            // A Keeprr Moment should always have BOTH images (front overlay + back base).
+            return assets.front != nil && assets.back != nil
+        }
+    }
+    
+    private var hasValidMoments: Bool {
+        !validMoments.isEmpty && !loadFailed
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                if hasValidMoments {
+                    // Show moment thumbnail
+                    Group {
+                        if let thumbnail = thumbnail {
+                            Image(uiImage: thumbnail)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                        } else {
+                            // Loading state - show static placeholder
+                            ZStack {
+                                Color.gray.opacity(0.2)
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            }
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                        }
+                    }
+                    .clipped()
+                    .cornerRadius(8)
+                    .overlay(
+                        // Moment count badge
+                        Group {
+                            if validMoments.count > 1 {
+                                HStack {
+                                    Spacer()
+                                    VStack {
+                                        Text("\(validMoments.count)")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.black.opacity(0.7))
+                                            .cornerRadius(10)
+                                        Spacer()
+                                    }
+                                }
+                                .padding(4)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    )
+                    .overlay(
+                        // Day number overlay
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                Text("\(day)")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(4)
+                                    .background(Color.black.opacity(0.5))
+                                    .cornerRadius(4)
+                                    .padding(4)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    )
+                    .overlay(
+                        // Today indicator
+                        Group {
+                            if isToday {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.blue, lineWidth: 2)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    )
+                } else {
+                    // Empty cell - show even if moments exist but assets are invalid
+                    ZStack {
+                        Color.gray.opacity(0.1)
+                        Text("\(day)")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .cornerRadius(8)
+                    .overlay(
+                        Group {
+                            if isToday {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.blue, lineWidth: 2)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    )
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Allow tap even if the thumbnail is still loading.
+                if let firstMoment = validMoments.first {
+                    onMomentTap(firstMoment)
+                }
+            }
+            .onAppear {
+                loadThumbnail(targetSize: geometry.size)
+            }
+            .onChange(of: validMoments.first?.id) { _, _ in
+                // When assets finish loading, validMoments transitions from empty -> non-empty.
+                // Retry thumbnail load so the first open of the tab shows previews immediately.
+                loadThumbnail(targetSize: geometry.size)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+    
+    private func loadThumbnail(targetSize: CGSize) {
+        // If assets haven't been resolved yet, don't mark as failed — we'll retry when they load.
+        guard let firstMoment = validMoments.first else { return }
+        
+        // Moments thumbnails should always be the BACK camera image.
+        let assets = momentsManager.getAssets(for: firstMoment.id)
+        guard let asset = assets.back else {
+            loadFailed = true
+            return
+        }
+        
+        loadFailed = false
+        
+        momentsManager.loadThumbnail(for: asset, targetSize: targetSize) { image in
+            if let image = image {
+                thumbnail = image
+                loadFailed = false
+            } else {
+                // If thumbnail failed to load, mark as failed so we don't display
+                loadFailed = true
+                thumbnail = nil
+            }
+        }
+    }
+}
+
+// MARK: - Moment Detail View
+
+struct MomentDetailView: View {
+    let moment: Moment
+    @ObservedObject var momentsManager: KeeprrMomentsManager
+    @Environment(\.dismiss) var dismiss
+    
+    private var dayStart: Date {
+        Calendar.current.startOfDay(for: moment.createdAt)
+    }
+    
+    private var dayMoments: [Moment] {
+        (momentsManager.momentsByDate[dayStart] ?? []).sorted { $0.createdAt < $1.createdAt }
+    }
+    
+    private var initialIndex: Int {
+        dayMoments.firstIndex(where: { $0.id == moment.id }) ?? 0
+    }
+    
+    @State private var currentIndex: Int = 0
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            if dayMoments.isEmpty {
+                VStack(spacing: 16) {
+                    ProgressView().tint(.white)
+                    Text("Loading moments...")
+                        .foregroundColor(.white.opacity(0.85))
+                    Button("Close") { dismiss() }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.2))
+                        .cornerRadius(10)
+                }
+            } else {
+                TabView(selection: $currentIndex) {
+                    ForEach(Array(dayMoments.enumerated()), id: \.element.id) { index, m in
+                        MomentPageView(moment: m, momentsManager: momentsManager)
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+            }
+            
+            // Header (updates as you swipe)
+            VStack {
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    
+                    Spacer()
+                    
+                    if let current = dayMoments[safe: currentIndex] {
+                        VStack(spacing: 4) {
+                            Text(current.createdAt.formatted(date: .long, time: .omitted))
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white)
+                            Text(current.createdAt.formatted(date: .omitted, time: .shortened))
+                                .font(.system(size: 16))
+                                .foregroundColor(.white.opacity(0.9))
+                            if dayMoments.count > 1 {
+                                Text("\(currentIndex + 1) of \(dayMoments.count)")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .padding(.top, 2)
+                            }
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Color.clear
+                        .frame(width: 44, height: 44)
+                }
+                .padding()
+                .padding(.top, 50)
+                
+                Spacer()
+            }
+        }
+        .onAppear {
+            currentIndex = initialIndex
+        }
+    }
+}
+
+// MARK: - Moment Page View (single moment display)
+
+private struct MomentPageView: View {
+    let moment: Moment
+    @ObservedObject var momentsManager: KeeprrMomentsManager
+    
+    @State private var backImage: UIImage?
+    @State private var frontImage: UIImage?
+    @State private var isLoading = true
+    @State private var loadFailed = false
+    
+    private var backAsset: PHAsset? {
+        momentsManager.getAssets(for: moment.id).back
+    }
+    
+    private var frontAsset: PHAsset? {
+        momentsManager.getAssets(for: moment.id).front
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            if isLoading && !loadFailed {
+                VStack(spacing: 20) {
+                    ProgressView().tint(.white)
+                    Text("Loading moment...")
+                        .foregroundColor(.white)
+                }
+            } else if let backImage {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(uiImage: backImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    
+                    if let frontImage {
+                        Image(uiImage: frontImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 140, height: 190)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                            )
+                            .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+                            .padding(.trailing, 18)
+                            .padding(.bottom, 24)
+                    }
+                }
+            } else if loadFailed {
+                VStack(spacing: 20) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.white.opacity(0.7))
+                    Text("Unable to load moment")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text("The image may have been deleted")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+            }
+        }
+        .onAppear {
+            loadMomentImages()
+        }
+        .onChange(of: moment.id) { _, _ in
+            loadMomentImages()
+        }
+    }
+    
+    private func loadMomentImages() {
+        isLoading = true
+        loadFailed = false
+        backImage = nil
+        frontImage = nil
+        
+        guard let backAsset, let frontAsset else {
+            isLoading = false
+            loadFailed = true
+            return
+        }
+        
+        let group = DispatchGroup()
+        var loadedBack: UIImage?
+        var loadedFront: UIImage?
+        
+        group.enter()
+        momentsManager.loadFullImage(for: backAsset) { image in
+            loadedBack = image
+            group.leave()
+        }
+        
+        group.enter()
+        momentsManager.loadFullImage(for: frontAsset) { image in
+            loadedFront = image
+            group.leave()
+        }
+        
+        group.notify(queue: .main) {
+            if let loadedBack {
+                backImage = loadedBack
+                frontImage = loadedFront
+                isLoading = false
+                loadFailed = false
+            } else {
+                isLoading = false
+                loadFailed = true
+            }
+        }
+    }
+}
+
+

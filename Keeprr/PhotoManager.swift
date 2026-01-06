@@ -49,7 +49,10 @@ class PhotoManager: ObservableObject {
     var loadedPhotoCount = 0
     private var allPhotosFetchResult: PHFetchResult<PHAsset>?
     private let batchSize = 200
-    private let initialLoadLimit = 1000 // Load first 1000 photos initially
+    // NOTE:
+    // We load the full library in batches by default to avoid "missing months" caused by
+    // pagination not triggering reliably depending on which tab was opened first.
+    private let initialLoadLimit = Int.max
     
     // Cache monthsWithPhotos to avoid recalculating
     private var cachedMonthsWithPhotos: [Date]?
@@ -79,7 +82,10 @@ class PhotoManager: ObservableObject {
                 }
             }
         } else if currentStatus == .authorized || currentStatus == .limited {
-            fetchPhotos()
+            // Avoid re-fetching every time the tab appears if we already have a fetch result.
+            if allPhotosFetchResult == nil {
+                fetchPhotos()
+            }
         }
     }
     
@@ -94,11 +100,22 @@ class PhotoManager: ObservableObject {
             let allPhotos = PHAsset.fetchAssets(with: .image, options: fetchOptions)
             let photoCount = allPhotos.count
             
-            // Store the fetch result for pagination
-            DispatchQueue.main.async {
-                self.allPhotosFetchResult = allPhotos
+            // Set fetch result immediately (not @Published) so batch loading never races it being nil.
+            self.allPhotosFetchResult = allPhotos
+            
+            // Reset published/UI state on the main thread BEFORE starting batch loads to avoid
+            // wiping out partially loaded results.
+            let resetState = {
                 self.totalPhotoCount = photoCount
                 self.loadedPhotoCount = 0
+                self.isLoadingMore = false
+                self.photosByDate = [:]
+                self.cachedMonthsWithPhotos = nil
+            }
+            if Thread.isMainThread {
+                resetState()
+            } else {
+                DispatchQueue.main.sync(execute: resetState)
             }
             
             // Load initial batches up to 1000 photos (or all if less than 1000)

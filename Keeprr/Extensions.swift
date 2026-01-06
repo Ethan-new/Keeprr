@@ -7,6 +7,12 @@
 
 import SwiftUI
 import Photos
+import CoreImage
+import ImageIO
+
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Collection Extension
 
@@ -17,7 +23,7 @@ extension Collection {
 }
 
 // MARK: - Async Image Helper
-
+#if canImport(UIKit)
 struct AsyncImage<Content: View, Placeholder: View>: View {
     let asset: PHAsset
     @ObservedObject var manager: KeeprrMomentsManager
@@ -54,5 +60,25 @@ struct AsyncImage<Content: View, Placeholder: View>: View {
         }
     }
 }
+#endif
 
+// MARK: - Image Encoding Helper
 
+#if canImport(UIKit)
+enum ImageEncode {
+    static let ciContext = CIContext()
+    
+    static func jpegData(from ciImage: CIImage, quality: CGFloat = 0.92) -> Data? {
+        guard let cg = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        let ui = UIImage(cgImage: cg)
+        return ui.jpegData(compressionQuality: quality)
+    }
+}
+#else
+enum ImageEncode {
+    static let ciContext = CIContext()
+}
+#endif
+
+// MARK: - Filter Helper
+// (Filters removed)
