@@ -34,6 +34,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         let userInfo = response.notification.request.content.userInfo
         if (userInfo["deeplink"] as? String) == "camera" {
+            if let dayId = userInfo["dayId"] as? String,
+               let slot = userInfo["slot"] as? Int {
+                NotificationManager.shared.markDailyPromptFired(dayId: dayId, slot: slot)
+            }
             DispatchQueue.main.async {
                 AppState.shared.selectedTab = 3
             }

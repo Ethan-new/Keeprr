@@ -16,6 +16,7 @@ final class NotificationManager {
     private let dailyPromptStartMinuteKey = "daily_prompt_start_minute_v1"
     private let dailyPromptEndMinuteKey = "daily_prompt_end_minute_v1"
     private let dailyPromptCountKey = "daily_prompt_count_v1"
+    private let firedSlotsKeyPrefix = "daily_prompt_fired_slots_v1_" // + yyyyMMdd
 
     // Legacy repeating request id (same time every day). We remove this when upgrading.
     private let legacyDailyPromptRequestId = "daily_photo_prompt_v1"
@@ -35,6 +36,21 @@ final class NotificationManager {
         let id: String
         let fireDate: Date
         let title: String
+    }
+
+    func markDailyPromptFired(dayId: String, slot: Int) {
+        let key = firedSlotsKeyPrefix + dayId
+        var raw = (UserDefaults.standard.array(forKey: key) as? [Int]) ?? []
+        if !raw.contains(slot) {
+            raw.append(slot)
+            UserDefaults.standard.set(raw, forKey: key)
+        }
+    }
+
+    private func firedSlots(for dayId: String) -> Set<Int> {
+        let key = firedSlotsKeyPrefix + dayId
+        let raw = (UserDefaults.standard.array(forKey: key) as? [Int]) ?? []
+        return Set(raw)
     }
 
     /// Call on app launch to request permissions once and ensure the daily prompt is scheduled.
@@ -193,6 +209,8 @@ final class NotificationManager {
 
         for dayOffset in 0..<rollingDaysToSchedule {
             guard let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: todayStart) else { continue }
+            let dayKey = dayId(for: dayStart)
+            let fired = firedSlots(for: dayKey)
 
             // Pick a random minute within the allowed window.
             // For "today", don't schedule in the past.
@@ -218,7 +236,10 @@ final class NotificationManager {
             )
 
             for (index, minuteOfDay) in minutesForDay.enumerated() {
-                let id = dailyPromptIdPrefixV3 + dayId(for: dayStart) + "_\(index)"
+                // If today's notification already fired (user tapped it), don't schedule it again.
+                if dayOffset == 0 && fired.contains(index) { continue }
+
+                let id = dailyPromptIdPrefixV3 + dayKey + "_\(index)"
                 guard !existingIds.contains(id) else { continue }
 
                 let hour = minuteOfDay / 60
@@ -232,7 +253,11 @@ final class NotificationManager {
                 content.title = "Take a Keeprr moment"
                 content.body = "Open the camera and capture today’s moment."
                 content.sound = .default
-                content.userInfo = ["deeplink": "camera"]
+                content.userInfo = [
+                    "deeplink": "camera",
+                    "dayId": dayKey,
+                    "slot": index
+                ]
 
                 let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
                 let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)

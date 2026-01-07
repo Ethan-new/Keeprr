@@ -32,10 +32,11 @@ struct CameraView: View {
     @State private var zoomFactorBack: CGFloat = 1.0
     @State private var zoomFactorFront: CGFloat = 1.0
     @State private var hasUltraWide: Bool = false
+    @State private var isReviewingCapture = false
     
     private var isUserZoomEnabled: Bool {
         // During the 2-photo capture flow (especially after the auto switch), lock zoom.
-        !isCapturing && !showCountdown && !shouldCaptureSecondPhoto
+        !isCapturing && !showCountdown && !shouldCaptureSecondPhoto && !isReviewingCapture
     }
     
     init(selectedTab: Binding<Int>) {
@@ -74,8 +75,15 @@ struct CameraView: View {
                     isUserZoomEnabled: Binding(
                         get: { isUserZoomEnabled },
                         set: { _ in }
-                    )
+                    ),
+                    isReviewingCapture: $isReviewingCapture
                 )
+                
+                if isReviewingCapture {
+                    captureReviewOverlay
+                        .transition(.opacity)
+                        .zIndex(50)
+                }
                 
                 // Countdown overlay
                 if showCountdown {
@@ -125,36 +133,39 @@ struct CameraView: View {
                 // Bottom controls (no tab bar visible)
                 VStack {
                     Spacer()
-                    HStack {
-                        // Placeholder for balance (keeps shutter centered)
-                        Spacer()
-                            .frame(width: 70, height: 70)
-                        
-                        CaptureButtonView()
-                            .onTapGesture {
-                                if !isCapturing {
-                                    isCapturing = true
-                                    didTapCapture = true
-                                }
-                            }
-                            .disabled(isCapturing)
-                            .opacity(isCapturing ? 0.5 : 1.0)
-                        
-                        // Camera rotation button (right side)
-                        Button {
-                            isFront.toggle()
-                        } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 24))
+                    
+                    if !isReviewingCapture {
+                        HStack {
+                            // Placeholder for balance (keeps shutter centered)
+                            Spacer()
                                 .frame(width: 70, height: 70)
-                                .foregroundColor(.white)
+                            
+                            CaptureButtonView()
+                                .onTapGesture {
+                                    if !isCapturing && !isReviewingCapture {
+                                        isCapturing = true
+                                        didTapCapture = true
+                                    }
+                                }
+                                .disabled(isCapturing || isReviewingCapture)
+                                .opacity((isCapturing || isReviewingCapture) ? 0.5 : 1.0)
+                            
+                            // Camera rotation button (right side)
+                            Button {
+                                isFront.toggle()
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 24))
+                                    .frame(width: 70, height: 70)
+                                    .foregroundColor(.white)
+                            }
+                            .disabled(isCapturing || isReviewingCapture)
+                            .opacity((isCapturing || isReviewingCapture) ? 0.5 : 1.0)
                         }
-                        .disabled(isCapturing)
-                        .opacity(isCapturing ? 0.5 : 1.0)
+                        .padding(.horizontal, 20)
+                        // Less bottom padding (controls closer to the bottom edge)
+                        .padding(.bottom, max(10, geo.safeAreaInsets.bottom + 6))
                     }
-                    .padding(.horizontal, 20)
-                    // Less bottom padding (controls closer to the bottom edge)
-                    .padding(.bottom, max(10, geo.safeAreaInsets.bottom + 6))
                 }
             }
         }
@@ -194,6 +205,217 @@ struct CameraView: View {
         .allowsHitTesting(isUserZoomEnabled)
         .opacity(isUserZoomEnabled ? 1.0 : 0.45)
     }
+    
+    private var captureReviewOverlay: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if let backImage {
+                    MomentCompositeDisplayView(
+                        backImage: backImage,
+                        frontImage: frontImage
+                    )
+                } else {
+                    ProgressView().tint(.white)
+                }
+
+                VStack {
+                    Spacer()
+                    reviewButtons(bottomInset: max(10, geo.safeAreaInsets.bottom + 6))
+                }
+                .allowsHitTesting(true)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func reviewButtons(bottomInset: CGFloat) -> some View {
+        HStack {
+            Button {
+                resetCaptureForRedo()
+            } label: {
+                Text("Redo")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
+                    .background(Color.white.opacity(0.18))
+                    .clipShape(Capsule())
+            }
+            
+            Spacer()
+            
+            Button {
+                saveMomentFromCapture()
+            } label: {
+                Text("Save")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
+                    .background(Color.white)
+                    .clipShape(Capsule())
+            }
+            .disabled(frontAssetId == nil || backAssetId == nil)
+            .opacity((frontAssetId == nil || backAssetId == nil) ? 0.6 : 1.0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, bottomInset)
+    }
+    
+    private func resetCaptureForRedo() {
+        isReviewingCapture = false
+        isCapturing = false
+        showCountdown = false
+        shouldCaptureSecondPhoto = false
+        countdown = 3
+        
+        frontImage = nil
+        backImage = nil
+        frontAssetId = nil
+        backAssetId = nil
+        
+        // Reset preview to front by default (matches initial flow).
+        isFront = true
+        
+        // Reset zoom defaults for next run.
+        zoomFactorFront = 1.0
+        zoomFactorBack = hasUltraWide ? 0.5 : 1.0
+    }
+    
+    private func saveMomentFromCapture() {
+        guard let frontId = frontAssetId, let backId = backAssetId else { return }
+        MomentStore.shared.addMoment(frontAssetId: frontId, backAssetId: backId)
+        resetCaptureForRedo()
+    }
+}
+
+// MARK: - Review display (matches Keeprr Moments viewer)
+
+private struct MomentCompositeDisplayView: View {
+    let backImage: UIImage
+    let frontImage: UIImage?
+
+    @State private var isSwapped = false
+    @State private var overlayOffset: CGSize = .zero
+    @State private var overlayDragTranslation: CGSize = .zero
+    @State private var canSwap = true
+    @GestureState private var isPressingBaseImage = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let container = geo.size
+            let baseImage: UIImage = (isSwapped ? (frontImage ?? backImage) : backImage)
+            let overlayImage: UIImage? = (isSwapped ? backImage : frontImage)
+
+            let imgSize = baseImage.size
+            let safeW = max(imgSize.width, CGFloat(1))
+            let safeH = max(imgSize.height, CGFloat(1))
+            let scale = min(container.width / safeW, container.height / safeH)
+            let fitted = CGSize(width: imgSize.width * scale, height: imgSize.height * scale)
+
+            // Keep the overlay within the displayed base-photo frame (account for padding).
+            let overlayPaddingX: CGFloat = 18
+            let overlayPaddingY: CGFloat = 24
+            let overlayMaxWidth = max(CGFloat(0), fitted.width - (overlayPaddingX * 2))
+            let overlayMaxHeight = max(CGFloat(0), fitted.height - (overlayPaddingY * 2))
+            let overlayWidth = min(CGFloat(140), overlayMaxWidth)
+            let overlayHeight = min(CGFloat(190), overlayMaxHeight)
+
+            let currentOverlayOffset = clampedOverlayOffset(
+                raw: CGSize(
+                    width: overlayOffset.width + overlayDragTranslation.width,
+                    height: overlayOffset.height + overlayDragTranslation.height
+                ),
+                fitted: fitted,
+                overlaySize: CGSize(width: overlayWidth, height: overlayHeight),
+                paddingX: overlayPaddingX,
+                paddingY: overlayPaddingY
+            )
+
+            ZStack(alignment: .topLeading) {
+                Image(uiImage: baseImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: fitted.width, height: fitted.height)
+                    .clipped()
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.5, maximumDistance: 10)
+                            .sequenced(before: DragGesture(minimumDistance: 0))
+                            .updating($isPressingBaseImage) { value, state, _ in
+                                switch value {
+                                case .second(true, _):
+                                    state = true
+                                default:
+                                    state = false
+                                }
+                            }
+                    )
+
+                if let overlayImage {
+                    Image(uiImage: overlayImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: overlayWidth, height: overlayHeight)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                        )
+                        .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+                        .opacity(isPressingBaseImage ? 0 : 1)
+                        .animation(.easeInOut(duration: 0.15), value: isPressingBaseImage)
+                        .offset(
+                            x: overlayPaddingX + currentOverlayOffset.width,
+                            y: overlayPaddingY + currentOverlayOffset.height
+                        )
+                        .onTapGesture {
+                            // Only swap if we actually have both photos loaded.
+                            guard frontImage != nil, canSwap else { return }
+                            canSwap = false
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                isSwapped.toggle()
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                canSwap = true
+                            }
+                        }
+                        .gesture(
+                            DragGesture(minimumDistance: 2)
+                                .onChanged { value in
+                                    overlayDragTranslation = value.translation
+                                }
+                                .onEnded { _ in
+                                    overlayOffset = currentOverlayOffset
+                                    overlayDragTranslation = .zero
+                                }
+                        )
+                }
+            }
+            .frame(width: fitted.width, height: fitted.height)
+            .position(x: container.width / 2, y: container.height / 2)
+        }
+    }
+
+    private func clampedOverlayOffset(
+        raw: CGSize,
+        fitted: CGSize,
+        overlaySize: CGSize,
+        paddingX: CGFloat,
+        paddingY: CGFloat
+    ) -> CGSize {
+        let minX = -paddingX
+        let maxX = max(CGFloat(0), fitted.width - overlaySize.width - paddingX)
+        let minY = -paddingY
+        let maxY = max(CGFloat(0), fitted.height - overlaySize.height - paddingY)
+
+        return CGSize(
+            width: min(max(raw.width, minX), maxX),
+            height: min(max(raw.height, minY), maxY)
+        )
+    }
 }
 
 // MARK: - Custom Camera Representable
@@ -214,6 +436,7 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
     @Binding var zoomFactorFront: CGFloat
     @Binding var hasUltraWide: Bool
     @Binding var isUserZoomEnabled: Bool
+    @Binding var isReviewingCapture: Bool
     
     func makeUIViewController(context: Context) -> SingleCameraController {
         let controller = SingleCameraController()
@@ -267,15 +490,9 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
                 // Both photos taken
                 isCapturing = false
                 shouldCaptureSecondPhoto = false
+                isReviewingCapture = true
                 
-                // Create Moment if both asset IDs are available
-                if let frontId = frontAssetId, let backId = backAssetId {
-                    MomentStore.shared.addMoment(frontAssetId: frontId, backAssetId: backId)
-                    
-                    // Reset for next capture
-                    frontAssetId = nil
-                    backAssetId = nil
-                }
+                // Moment creation is now controlled by the review UI ("Save").
             }
             
             // Set callbacks and explicitly capture front first
