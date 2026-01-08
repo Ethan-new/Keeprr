@@ -91,6 +91,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     streakCard
+                    totalMomentsCard
                     
                     Spacer(minLength: 12)
                 }
@@ -146,6 +147,38 @@ struct HomeView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+    
+    private var totalMomentsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.18))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "sparkles")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 20, weight: .semibold))
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Total moments kept")
+                        .font(.headline)
+                    Text("\(momentStore.moments.count)")
+                        .font(.system(size: 28, weight: .bold))
+                }
+                
+                Spacer()
+            }
+            
+            Text("Moments are created when you take both front and back photos.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

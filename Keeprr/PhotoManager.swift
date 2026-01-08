@@ -84,7 +84,7 @@ class PhotoManager: ObservableObject {
         } else if currentStatus == .authorized || currentStatus == .limited {
             // Avoid re-fetching every time the tab appears if we already have a fetch result.
             if allPhotosFetchResult == nil {
-                fetchPhotos()
+            fetchPhotos()
             }
         }
     }
@@ -101,7 +101,7 @@ class PhotoManager: ObservableObject {
             let photoCount = allPhotos.count
             
             // Set fetch result immediately (not @Published) so batch loading never races it being nil.
-            self.allPhotosFetchResult = allPhotos
+                self.allPhotosFetchResult = allPhotos
             
             // Reset published/UI state on the main thread BEFORE starting batch loads to avoid
             // wiping out partially loaded results.
