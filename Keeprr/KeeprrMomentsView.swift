@@ -402,48 +402,18 @@ struct MomentDetailView: View {
     @ObservedObject var momentsManager: KeeprrMomentsManager
     @Environment(\.dismiss) var dismiss
     
-    private var dayStart: Date {
-        Calendar.current.startOfDay(for: moment.createdAt)
-    }
-    
-    private var dayMoments: [Moment] {
-        (momentsManager.momentsByDate[dayStart] ?? []).sorted { $0.createdAt < $1.createdAt }
-    }
-    
-    private var initialIndex: Int {
-        dayMoments.firstIndex(where: { $0.id == moment.id }) ?? 0
-    }
+    private var dayStart: Date { Calendar.current.startOfDay(for: moment.createdAt) }
     
     @State private var currentIndex: Int = 0
+    @State private var windowMoments: [Moment] = []
+    @State private var currentMomentId: String = ""
+    @State private var windowCenterDay: Date?
+    @State private var isRebuildingWindow = false
     
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            if dayMoments.isEmpty {
-                VStack(spacing: 16) {
-                    ProgressView().tint(.white)
-                    Text("Loading moments...")
-                        .foregroundColor(.white.opacity(0.85))
-                    Button("Close") { dismiss() }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.2))
-                        .cornerRadius(10)
-                }
-            } else {
-                TabView(selection: $currentIndex) {
-                    ForEach(Array(dayMoments.enumerated()), id: \.element.id) { index, m in
-                        MomentPageView(moment: m, momentsManager: momentsManager)
-                            .tag(index)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-            }
-            
-            // Header (updates as you swipe)
-            VStack {
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                // Fixed header (always above the image content)
                 HStack {
                     Button(action: { dismiss() }) {
                         Image(systemName: "chevron.down")
@@ -464,12 +434,10 @@ struct MomentDetailView: View {
                             Text(current.createdAt.formatted(date: .omitted, time: .shortened))
                                 .font(.system(size: 16))
                                 .foregroundColor(.white.opacity(0.9))
-                            if dayMoments.count > 1 {
-                                Text("\(currentIndex + 1) of \(dayMoments.count)")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.white.opacity(0.7))
-                                    .padding(.top, 2)
-                            }
+                            Text("\(currentDayIndex + 1) of \(max(currentDayCount, 1))")
+                                .font(.system(size: 14))
+                                .foregroundColor(.white.opacity(0.7))
+                                .padding(.top, 2)
                         }
                     }
                     
@@ -478,15 +446,178 @@ struct MomentDetailView: View {
                     Color.clear
                         .frame(width: 44, height: 44)
                 }
-                .padding()
-                .padding(.top, 50)
+                .padding(.horizontal, 16)
+                .padding(.top, geo.safeAreaInsets.top + 10)
+                .padding(.bottom, 12)
+                .background(Color.black.ignoresSafeArea(edges: .top))
                 
-                Spacer()
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    
+                    if dayMoments.isEmpty {
+                        VStack(spacing: 16) {
+                            ProgressView().tint(.white)
+                            Text("Loading moments...")
+                                .foregroundColor(.white.opacity(0.85))
+                            Button("Close") { dismiss() }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(Color.white.opacity(0.2))
+                                .cornerRadius(10)
+                        }
+                    } else {
+                        TabView(selection: $currentIndex) {
+                            ForEach(Array(dayMoments.enumerated()), id: \.element.id) { index, m in
+                                MomentPageView(moment: m, momentsManager: momentsManager)
+                                    .tag(index)
+                            }
+                        }
+                        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                        .transaction { txn in
+                            if isRebuildingWindow {
+                                txn.animation = nil
+                            }
+                        }
+                        
+                        VStack {
+                            Spacer()
+                            momentDayAwareIndicator
+                                .padding(.bottom, max(10, geo.safeAreaInsets.bottom + 6))
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .background(Color.black.ignoresSafeArea())
         }
         .onAppear {
-            currentIndex = initialIndex
+            currentMomentId = moment.id
+            windowCenterDay = dayStart
+            rebuildWindow(centerDay: windowCenterDay, keepingMomentId: currentMomentId)
+            if let idx = windowMoments.firstIndex(where: { $0.id == moment.id }) {
+                currentIndex = idx
+            }
         }
+        .onChange(of: momentsManager.moments.map(\.id)) { _, _ in
+            // `momentsByDate` isn't Equatable (Moment isn't Equatable), so observe a stable Equatable proxy.
+            rebuildWindow(centerDay: windowCenterDay, keepingMomentId: currentMomentId)
+        }
+        .onChange(of: currentIndex) { _, newValue in
+            guard let current = windowMoments[safe: newValue] else { return }
+            currentMomentId = current.id
+            windowCenterDay = Calendar.current.startOfDay(for: current.createdAt)
+            maybeShiftWindowForPagingEdge()
+        }
+    }
+
+    // MARK: - Windowed paging across days
+    
+    private var dayMoments: [Moment] { windowMoments }
+    
+    private func rebuildWindow(centerDay: Date?, keepingMomentId: String?) {
+        let calendar = Calendar.current
+        let center = centerDay ?? dayStart
+        
+        let allDays = momentsManager.momentsByDate.keys
+            .map { calendar.startOfDay(for: $0) }
+            .sorted(by: >) // newest day first
+        
+        guard let dayIndex = allDays.firstIndex(of: center) else {
+            windowMoments = (momentsManager.momentsByDate[dayStart] ?? []).sorted { $0.createdAt < $1.createdAt }
+            currentIndex = windowMoments.firstIndex(where: { $0.id == (keepingMomentId ?? moment.id) }) ?? 0
+            return
+        }
+        
+        let daysEachDirection = 3
+        let start = max(0, dayIndex - daysEachDirection)
+        let end = min(allDays.count - 1, dayIndex + daysEachDirection)
+        let windowDays = Array(allDays[start...end])
+        
+        var next: [Moment] = []
+        next.reserveCapacity(64)
+        for day in windowDays {
+            let ms = (momentsManager.momentsByDate[day] ?? []).sorted { $0.createdAt < $1.createdAt }
+            next.append(contentsOf: ms)
+        }
+        
+        // Ensure selected moment exists in list.
+        if !next.contains(where: { $0.id == moment.id }) {
+            next.insert(moment, at: 0)
+        }
+        
+        let targetId = keepingMomentId ?? currentMomentId
+        
+        isRebuildingWindow = true
+        var txn = Transaction()
+        txn.animation = nil
+        withTransaction(txn) {
+            windowMoments = next
+            currentIndex = next.firstIndex(where: { $0.id == targetId }) ?? 0
+        }
+        isRebuildingWindow = false
+    }
+    
+    private func maybeShiftWindowForPagingEdge() {
+        guard !windowMoments.isEmpty else { return }
+        let nearStart = currentIndex <= 2
+        let nearEnd = currentIndex >= max(0, windowMoments.count - 3)
+        guard nearStart || nearEnd else { return }
+        
+        rebuildWindow(centerDay: windowCenterDay, keepingMomentId: currentMomentId)
+    }
+    
+    // MARK: - Day-scoped counter + day-aware indicator
+    
+    private var currentDayKey: Date? {
+        guard let current = windowMoments[safe: currentIndex] else { return nil }
+        return Calendar.current.startOfDay(for: current.createdAt)
+    }
+    
+    private var currentDayMoments: [Moment] {
+        guard let day = currentDayKey else { return [] }
+        let cal = Calendar.current
+        return windowMoments.filter { cal.startOfDay(for: $0.createdAt) == day }
+    }
+    
+    private var currentDayCount: Int { currentDayMoments.count }
+    
+    private var currentDayIndex: Int {
+        guard let current = windowMoments[safe: currentIndex] else { return 0 }
+        return currentDayMoments.firstIndex(where: { $0.id == current.id }) ?? 0
+    }
+    
+    private var momentDayAwareIndicator: some View {
+        guard !windowMoments.isEmpty else { return AnyView(EmptyView()) }
+        let radius = 10
+        let start = max(0, currentIndex - radius)
+        let end = min(windowMoments.count - 1, currentIndex + radius)
+        
+        return AnyView(
+            HStack(spacing: 6) {
+                ForEach(start...end, id: \.self) { idx in
+                    Circle()
+                        .fill(idx == currentIndex ? Color.white : Color.white.opacity(0.35))
+                        .frame(width: idx == currentIndex ? 8 : 6, height: idx == currentIndex ? 8 : 6)
+                    
+                    if idx < end {
+                        let aDay = Calendar.current.startOfDay(for: windowMoments[idx].createdAt)
+                        let bDay = Calendar.current.startOfDay(for: windowMoments[idx + 1].createdAt)
+                        if aDay != bDay {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.45))
+                                .frame(width: 2, height: 8)
+                                .padding(.horizontal, 6)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.35))
+            .clipShape(Capsule())
+        )
     }
 }
 
@@ -615,18 +746,10 @@ private struct MomentPageView: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
-                    .position(x: container.width / 2, y: container.height / 2)
+                    // Top-align content within the available space (matches All Photos viewer layout).
+                    .position(x: container.width / 2, y: fitted.height / 2)
                 }
-                .overlay {
-                    // Only show the spinner if we have nothing rendered yet.
-                    if isLoading && backImage == nil && !loadFailed {
-                        VStack(spacing: 12) {
-                            ProgressView().tint(.white)
-                            Text("Loading moment...")
-                                .foregroundColor(.white)
-                        }
-                    }
-                }
+                // No spinner overlay here: this branch already has a rendered image.
             } else if loadFailed {
                 VStack(spacing: 20) {
                     Image(systemName: "exclamationmark.triangle")

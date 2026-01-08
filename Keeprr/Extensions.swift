@@ -80,5 +80,22 @@ enum ImageEncode {
 }
 #endif
 
+// MARK: - UIImage helpers
+#if canImport(UIKit)
+extension UIImage {
+    /// Returns a horizontally mirrored copy of the image (left-right flip).
+    func horizontallyMirrored() -> UIImage {
+        UIGraphicsBeginImageContextWithOptions(size, false, scale)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return self }
+        ctx.translateBy(x: size.width, y: 0)
+        ctx.scaleBy(x: -1, y: 1)
+        draw(in: CGRect(origin: .zero, size: size))
+        let out = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return out ?? self
+    }
+}
+#endif
+
 // MARK: - Filter Helper
 // (Filters removed)

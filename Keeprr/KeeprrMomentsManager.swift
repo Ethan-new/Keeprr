@@ -192,14 +192,22 @@ class KeeprrMomentsManager: ObservableObject {
         }
         
         let options = PHImageRequestOptions()
+        // Important: return a single callback (DispatchGroup callers assume 1 completion).
+        // Opportunistic may callback multiple times (degraded then final), which can crash callers.
         options.deliveryMode = .highQualityFormat
-        options.resizeMode = .none
+        options.resizeMode = .fast
         options.isSynchronous = false
         options.isNetworkAccessAllowed = true
+        options.version = .current
         
         let screenSize = UIScreen.main.bounds.size
         let scale = UIScreen.main.scale
-        let targetSize = CGSize(width: screenSize.width * scale * 3, height: screenSize.height * scale * 3)
+        // Keep memory bounded: request a high-quality *screen-sized* image, not full-res.
+        let desiredMax = max(screenSize.width, screenSize.height) * scale * 1.5
+        let assetMax = CGFloat(max(asset.pixelWidth, asset.pixelHeight))
+        // Never request a thumbnail larger than the original asset (prevents CGImageSource warnings).
+        let targetMax = max(1, min(desiredMax, assetMax))
+        let targetSize = CGSize(width: targetMax, height: targetMax)
         
         PHImageManager.default().requestImage(
             for: asset,
@@ -207,8 +215,17 @@ class KeeprrMomentsManager: ObservableObject {
             contentMode: .aspectFit,
             options: options
         ) { image, _ in
-            DispatchQueue.main.async {
-                completion(image)
+            guard let image else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            
+            // Reduce swipe stutter: pre-decode off the main thread.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let prepared = image.preparingForDisplay() ?? image
+                DispatchQueue.main.async {
+                    completion(prepared)
+                }
             }
         }
     }

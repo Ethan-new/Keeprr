@@ -13,9 +13,14 @@ struct SettingsView: View {
     @AppStorage("daily_prompt_start_minute_v1") private var dailyPromptStartMinute: Int = 9 * 60
     @AppStorage("daily_prompt_end_minute_v1") private var dailyPromptEndMinute: Int = 22 * 60
     @AppStorage("daily_prompt_count_v1") private var dailyPromptCountPerDay: Int = 1
+    @AppStorage("front_camera_save_mode_v1") private var frontCameraSaveMode: Int = 0
     
     @State private var upcoming: [NotificationManager.ScheduledNotification] = []
     @State private var isLoadingSchedule = false
+    
+    // Debug
+    @ObservedObject private var momentStore = MomentStore.shared
+    @State private var momentsExpanded = false
 
     private func dateForMinuteOfDay(_ minute: Int) -> Date {
         let clamped = min(max(minute, 0), 1439)
@@ -80,6 +85,18 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
+
+            Section("Camera") {
+                Picker("Front camera save", selection: $frontCameraSaveMode) {
+                    Text("Unmirrored").tag(0)
+                    Text("Mirrored (as seen)").tag(1)
+                }
+                .pickerStyle(.segmented)
+
+                Text("Controls how the front photo is saved to your library. Preview is still mirrored like the system camera.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
             
             Section("Upcoming schedule (debug)") {
                 Button {
@@ -125,6 +142,29 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 4)
                     }
+                }
+            }
+            
+            Section("Moments (debug)") {
+                DisclosureGroup(isExpanded: $momentsExpanded) {
+                    if momentStore.moments.isEmpty {
+                        Text("No moments yet.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(momentStore.moments) { moment in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("id: \(moment.id)")
+                                Text("createdAt: \(moment.createdAt.formatted(date: .long, time: .standard))")
+                                Text("frontAssetId: \(moment.frontAssetId)")
+                                Text("backAssetId: \(moment.backAssetId)")
+                            }
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(.vertical, 6)
+                        }
+                    }
+                } label: {
+                    Text("Show moments (\(momentStore.moments.count))")
                 }
             }
         }

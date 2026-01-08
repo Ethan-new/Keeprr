@@ -33,6 +33,7 @@ struct CameraView: View {
     @State private var zoomFactorFront: CGFloat = 1.0
     @State private var hasUltraWide: Bool = false
     @State private var isReviewingCapture = false
+    @State private var secondCaptureIsFront = false
     
     private var isUserZoomEnabled: Bool {
         // During the 2-photo capture flow (especially after the auto switch), lock zoom.
@@ -76,7 +77,8 @@ struct CameraView: View {
                         get: { isUserZoomEnabled },
                         set: { _ in }
                     ),
-                    isReviewingCapture: $isReviewingCapture
+                    isReviewingCapture: $isReviewingCapture,
+                    secondCaptureIsFront: $secondCaptureIsFront
                 )
                 
                 if isReviewingCapture {
@@ -278,6 +280,7 @@ struct CameraView: View {
         
         // Reset preview to front by default (matches initial flow).
         isFront = true
+        secondCaptureIsFront = false
         
         // Reset zoom defaults for next run.
         zoomFactorFront = 1.0
@@ -437,6 +440,7 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
     @Binding var hasUltraWide: Bool
     @Binding var isUserZoomEnabled: Bool
     @Binding var isReviewingCapture: Bool
+    @Binding var secondCaptureIsFront: Bool
     
     func makeUIViewController(context: Context) -> SingleCameraController {
         let controller = SingleCameraController()
@@ -452,6 +456,9 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
         controller.onBackZoomChanged = { zoom in
             zoomFactorBack = zoom
         }
+        controller.onFrontZoomChanged = { zoom in
+            zoomFactorFront = zoom
+        }
         return controller
     }
     
@@ -462,13 +469,21 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
             // Immediately reset to prevent multiple triggers
             didTapCapture = false
             
+            // Decide capture order based on current preview.
+            // This prevents the preview from "unzooming" unexpectedly when the user starts on the back camera.
+            let firstIsFront = isFront
+            secondCaptureIsFront = !firstIsFront
+            
             // Create callbacks and pass directly to controller
             let firstPhotoCallback: () -> Void = {
                 // First photo taken, switch preview camera and start countdown
                 // When switching to the other side for the second photo: force zoom out and lock user zoom.
-                zoomFactorBack = hasUltraWide ? 0.5 : 1.0
-                zoomFactorFront = 1.0
-                isFront.toggle() // Only for preview UI
+                if secondCaptureIsFront {
+                    zoomFactorFront = 1.0
+                } else {
+                    zoomFactorBack = hasUltraWide ? 0.5 : 1.0
+                }
+                isFront = secondCaptureIsFront // preview the camera we are about to capture second
                 showCountdown = true
                 countdown = 3
                 
@@ -495,17 +510,29 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
                 // Moment creation is now controlled by the review UI ("Save").
             }
             
-            // Set callbacks and explicitly capture front first
-            cameraViewController.onFirstPhotoComplete = firstPhotoCallback
-            cameraViewController.onSecondPhotoComplete = secondPhotoCallback
-            cameraViewController.captureFront()
+            // Map delegate callbacks (front delegate = onFirstPhotoComplete, back delegate = onSecondPhotoComplete)
+            // to the "first/second" capture flow depending on which side we start on.
+            if firstIsFront {
+                cameraViewController.onFirstPhotoComplete = firstPhotoCallback
+                cameraViewController.onSecondPhotoComplete = secondPhotoCallback
+                cameraViewController.captureFront()
+            } else {
+                cameraViewController.onSecondPhotoComplete = firstPhotoCallback
+                cameraViewController.onFirstPhotoComplete = secondPhotoCallback
+                cameraViewController.captureBack()
+            }
         }
         
         if shouldCaptureSecondPhoto {
-            // Explicitly capture back second (guaranteed to be different camera)
-            // Ensure the second (back) capture is always fully zoomed out (0.5× if ultra-wide exists).
-            zoomFactorBack = hasUltraWide ? 0.5 : 1.0
-            cameraViewController.captureBack()
+            // Explicitly capture the other side second.
+            if secondCaptureIsFront {
+                zoomFactorFront = 1.0
+                cameraViewController.captureFront()
+            } else {
+                // Ensure the second (back) capture is always fully zoomed out (0.5× if ultra-wide exists).
+                zoomFactorBack = hasUltraWide ? 0.5 : 1.0
+                cameraViewController.captureBack()
+            }
             shouldCaptureSecondPhoto = false
         }
         
@@ -556,8 +583,24 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
                 return
             }
 
-            // Filters removed: always keep original bytes/metadata (Camera-app-like).
-            parent.frontImage = ui
+            let saveMode = UserDefaults.standard.integer(forKey: "front_camera_save_mode_v1") // 0 = unmirrored (default), 1 = mirrored
+            let finalFrontImage: UIImage
+            let finalFrontData: Data
+            let finalFrontUTI: String
+
+            if saveMode == 1 {
+                // Save "as seen" (mirrored).
+                finalFrontImage = ui.horizontallyMirrored()
+                finalFrontData = finalFrontImage.jpegData(compressionQuality: 0.95) ?? data
+                finalFrontUTI = "public.jpeg"
+            } else {
+                // Default behavior: save the original capture bytes.
+                finalFrontImage = ui
+                finalFrontData = data
+                finalFrontUTI = "public.image"
+            }
+
+            parent.frontImage = finalFrontImage
 
             Task { @MainActor in
                 do {
@@ -569,7 +612,7 @@ struct CustomCameraRepresentable: UIViewControllerRepresentable {
                     
                     // `AVCaptureResolvedPhotoSettings` doesn't expose the file type in all SDKs.
                     // Use a safe generic UTI; Photos will still store the bytes correctly.
-                    let id = try await PhotoAlbumService.shared.saveImageDataToAlbum(data, uniformTypeIdentifier: "public.image")
+                    let id = try await PhotoAlbumService.shared.saveImageDataToAlbum(finalFrontData, uniformTypeIdentifier: finalFrontUTI)
                     parent.frontAssetId = id
                     print("Front photo saved with asset ID: \(id)")
                 } catch {
@@ -665,6 +708,7 @@ final class SingleCameraController: UIViewController, AVCaptureVideoDataOutputSa
     
     // Callback for zoom changes (to update UI)
     var onBackZoomChanged: ((CGFloat) -> Void)?
+    var onFrontZoomChanged: ((CGFloat) -> Void)?
     
     var onFirstPhotoComplete: (() -> Void)?
     var onSecondPhotoComplete: (() -> Void)?
@@ -757,6 +801,7 @@ final class SingleCameraController: UIViewController, AVCaptureVideoDataOutputSa
             
             if position == .front {
                 currentFrontZoom = clamped
+                onFrontZoomChanged?(clamped)
             } else {
                 currentBackVirtualZoom = clamped
             }
@@ -1004,6 +1049,7 @@ final class SingleCameraController: UIViewController, AVCaptureVideoDataOutputSa
                 }
             } else {
                 currentFrontZoom = getZoom(for: .front)
+                onFrontZoomChanged?(currentFrontZoom)
             }
         default:
             break
