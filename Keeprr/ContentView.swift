@@ -44,6 +44,7 @@ struct ContentView: View {
 
 struct HomeView: View {
     @ObservedObject private var momentStore = MomentStore.shared
+    @ObservedObject private var appState = AppState.shared
     
     private var todayStart: Date {
         Calendar.current.startOfDay(for: Date())
@@ -90,6 +91,7 @@ struct HomeView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    captureTodayCard
                     streakCard
                     totalMomentsCard
                     
@@ -152,6 +154,43 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var captureTodayCard: some View {
+        Button {
+            appState.selectedTab = 3 // Camera tab
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill((hasMomentToday ? Color.green : Color.blue).opacity(0.18))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: hasMomentToday ? "checkmark.circle.fill" : "camera.fill")
+                        .foregroundColor(hasMomentToday ? .green : .blue)
+                        .font(.system(size: 20, weight: .semibold))
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Capture today’s moment")
+                        .font(.headline)
+                    Text(hasMomentToday ? "Done for today" : "Not yet")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(hasMomentToday ? .green : .primary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Capture today’s moment")
+        .accessibilityValue(hasMomentToday ? "Done for today" : "Not yet")
     }
     
     private var totalMomentsCard: some View {
