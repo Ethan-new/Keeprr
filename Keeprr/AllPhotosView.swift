@@ -669,8 +669,9 @@ struct PhotoViewerModal: View {
                 windowCenterDay = Calendar.current.startOfDay(for: d)
             }
 
-            // Load older photos as you approach the end (older direction).
-            if newValue >= assets.count - 3,
+            // Load older photos as you approach the beginning (older direction),
+            // since this pager is ordered oldest -> newest.
+            if newValue <= 2,
                !photoManager.isLoadingMore,
                photoManager.loadedPhotoCount < photoManager.totalPhotoCount {
                 photoManager.loadMorePhotos()
@@ -781,14 +782,14 @@ struct PhotoViewerModal: View {
         let calendar = Calendar.current
         guard let center = windowCenterDay else { return }
 
-        // Available days sorted newest -> oldest
+        // Available days sorted oldest -> newest (matches pager ordering)
         let allDays = photoManager.photosByDate.keys
             .map { calendar.startOfDay(for: $0) }
-            .sorted(by: >)
+            .sorted(by: <)
 
         guard let dayIndex = allDays.firstIndex(of: center) else { return }
 
-        // direction: 1 = swipe left -> older day, -1 = swipe right -> newer day
+        // direction: 1 = swipe left -> newer day, -1 = swipe right -> older day
         let targetIndex = dayIndex + direction
         guard targetIndex >= 0, targetIndex < allDays.count else { return }
 
@@ -808,10 +809,10 @@ struct PhotoViewerModal: View {
             center = calendar.startOfDay(for: Date())
         }
 
-        // Available days sorted newest -> oldest
+        // Available days sorted oldest -> newest (matches pager ordering)
         let allDays = photoManager.photosByDate.keys
             .map { calendar.startOfDay(for: $0) }
-            .sorted(by: >)
+            .sorted(by: <)
 
         // If we don't have this day loaded yet, just show the initial asset.
         guard let dayIndex = allDays.firstIndex(of: center) else {
@@ -829,14 +830,17 @@ struct PhotoViewerModal: View {
         var windowAssets: [PHAsset] = windowDays.flatMap { day in
             photoManager.photosByDate[day] ?? []
         }
-        // Newest -> oldest
+        // Oldest -> newest (so swipe-left moves toward the present)
         windowAssets.sort { a, b in
-            (a.creationDate ?? .distantPast) > (b.creationDate ?? .distantPast)
+            (a.creationDate ?? .distantPast) < (b.creationDate ?? .distantPast)
         }
 
         // Ensure the initial asset is included.
         if !windowAssets.contains(where: { $0.localIdentifier == initialAsset.localIdentifier }) {
-            windowAssets.insert(initialAsset, at: 0)
+            windowAssets.append(initialAsset)
+            windowAssets.sort { a, b in
+                (a.creationDate ?? .distantPast) < (b.creationDate ?? .distantPast)
+            }
         }
 
         let targetId = keepingAssetId ?? currentAssetId
@@ -968,7 +972,7 @@ struct PhotoViewerModal: View {
             return calendar.startOfDay(for: d) == day
         }
         .sorted { a, b in
-            (a.creationDate ?? .distantPast) > (b.creationDate ?? .distantPast)
+            (a.creationDate ?? .distantPast) < (b.creationDate ?? .distantPast)
         }
     }
 

@@ -525,6 +525,7 @@ struct MomentDetailView: View {
             .sorted(by: >) // newest day first
         
         guard let dayIndex = allDays.firstIndex(of: center) else {
+            // Oldest -> newest so swipe left goes toward present, swipe right goes further back.
             windowMoments = (momentsManager.momentsByDate[dayStart] ?? []).sorted { $0.createdAt < $1.createdAt }
             currentIndex = windowMoments.firstIndex(where: { $0.id == (keepingMomentId ?? moment.id) }) ?? 0
             return
@@ -538,6 +539,7 @@ struct MomentDetailView: View {
         var next: [Moment] = []
         next.reserveCapacity(64)
         for day in windowDays {
+            // Oldest -> newest so swiping direction matches the (flipped) photo viewer.
             let ms = (momentsManager.momentsByDate[day] ?? []).sorted { $0.createdAt < $1.createdAt }
             next.append(contentsOf: ms)
         }
@@ -546,6 +548,11 @@ struct MomentDetailView: View {
         if !next.contains(where: { $0.id == moment.id }) {
             next.insert(moment, at: 0)
         }
+
+        // Make ordering unambiguous for the pager: oldest -> newest across the whole window.
+        // This guarantees swipe-left = newer (toward present), swipe-right = older (further),
+        // even if upstream arrays arrive in an unexpected order.
+        next.sort { $0.createdAt < $1.createdAt }
         
         let targetId = keepingMomentId ?? currentMomentId
         
@@ -578,7 +585,9 @@ struct MomentDetailView: View {
     private var currentDayMoments: [Moment] {
         guard let day = currentDayKey else { return [] }
         let cal = Calendar.current
-        return windowMoments.filter { cal.startOfDay(for: $0.createdAt) == day }
+        return windowMoments
+            .filter { cal.startOfDay(for: $0.createdAt) == day }
+            .sorted { $0.createdAt < $1.createdAt }
     }
     
     private var currentDayCount: Int { currentDayMoments.count }
