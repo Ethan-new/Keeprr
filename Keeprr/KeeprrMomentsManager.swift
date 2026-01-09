@@ -234,4 +234,48 @@ class KeeprrMomentsManager: ObservableObject {
     func getAssets(for momentId: String) -> (front: PHAsset?, back: PHAsset?) {
         return momentAssets[momentId] ?? (front: nil, back: nil)
     }
+
+    /// Deletes the underlying Photos assets (front + back) for a moment, then removes the moment from the app.
+    /// Requires photo library read/write permission; will fail if the user denies permission or if assets are missing.
+    func deleteMomentPhotos(_ moment: Moment, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard authorizationStatus == .authorized || authorizationStatus == .limited else {
+            completion(.failure(NSError(domain: "KeeprrMomentsManager", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Photo library permission is required to delete photos."
+            ])))
+            return
+        }
+        
+        let front = PHAsset.fetchAssets(withLocalIdentifiers: [moment.frontAssetId], options: nil).firstObject
+        let back = PHAsset.fetchAssets(withLocalIdentifiers: [moment.backAssetId], options: nil).firstObject
+        let assetsToDelete = [front, back].compactMap { $0 }
+        
+        guard !assetsToDelete.isEmpty else {
+            completion(.failure(NSError(domain: "KeeprrMomentsManager", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Unable to find the photos for this moment."
+            ])))
+            return
+        }
+        
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.deleteAssets(assetsToDelete as NSArray)
+        }) { [weak self] success, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                guard success else {
+                    completion(.failure(NSError(domain: "KeeprrMomentsManager", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: "Delete failed."
+                    ])))
+                    return
+                }
+                
+                // Remove from the app’s local store so UI stays consistent.
+                self?.momentStore.deleteMoment(withId: moment.id)
+                self?.momentAssets.removeValue(forKey: moment.id)
+                completion(.success(()))
+            }
+        }
+    }
 }

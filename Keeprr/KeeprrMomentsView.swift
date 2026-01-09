@@ -410,6 +410,9 @@ struct MomentDetailView: View {
     @State private var windowCenterDay: Date?
     @State private var isRebuildingWindow = false
     
+    @State private var showDeleteAlert = false
+    @State private var deleteErrorMessage: String?
+    
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
@@ -442,9 +445,21 @@ struct MomentDetailView: View {
                     }
                     
                     Spacer()
-                    
-                    Color.clear
-                        .frame(width: 44, height: 44)
+
+                    Menu {
+                        Button(role: .destructive) {
+                            showDeleteAlert = true
+                        } label: {
+                            Label("Delete Moment", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white.opacity(0.2))
+                            .clipShape(Circle())
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, geo.safeAreaInsets.top + 10)
@@ -509,6 +524,30 @@ struct MomentDetailView: View {
             currentMomentId = current.id
             windowCenterDay = Calendar.current.startOfDay(for: current.createdAt)
             maybeShiftWindowForPagingEdge()
+        }
+        .alert("Delete Moment", isPresented: $showDeleteAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                guard let current = windowMoments[safe: currentIndex] else { return }
+                momentsManager.deleteMomentPhotos(current) { result in
+                    switch result {
+                    case .success:
+                        dismiss()
+                    case .failure(let err):
+                        deleteErrorMessage = err.localizedDescription
+                    }
+                }
+            }
+        } message: {
+            Text("This will delete the moment’s photos from your library. This action cannot be undone.")
+        }
+        .alert("Unable to Delete", isPresented: Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { deleteErrorMessage = nil }
+        } message: {
+            Text(deleteErrorMessage ?? "Unknown error.")
         }
     }
 
