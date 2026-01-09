@@ -12,6 +12,9 @@ final class NotificationManager {
     static let shared = NotificationManager()
     private init() {}
 
+    // iOS limit for pending local notifications is 64 total per app.
+    private let maxPendingNotificationRequests = 64
+
     private let dailyPromptsEnabledKey = "daily_prompts_enabled_v1"
     private let dailyPromptStartMinuteKey = "daily_prompt_start_minute_v1"
     private let dailyPromptEndMinuteKey = "daily_prompt_end_minute_v1"
@@ -63,8 +66,8 @@ final class NotificationManager {
     }
 
     var isDailyPromptsEnabled: Bool {
-        // Default ON unless the user explicitly disables it.
-        if UserDefaults.standard.object(forKey: dailyPromptsEnabledKey) == nil { return true }
+        // Default OFF: only request notification permission after the user explicitly opts in.
+        if UserDefaults.standard.object(forKey: dailyPromptsEnabledKey) == nil { return false }
         return UserDefaults.standard.bool(forKey: dailyPromptsEnabledKey)
     }
 
@@ -177,7 +180,9 @@ final class NotificationManager {
                     .filter { $0.hasPrefix(self.legacyDailyPromptIdPrefixV2) || $0.hasPrefix(self.dailyPromptIdPrefixV3) }
             )
 
-            self.scheduleMissingDailyPrompts(existingIds: existingDailyIds)
+            // Respect the global system cap (64). This includes requests from other parts of the app.
+            let remainingSlots = max(0, self.maxPendingNotificationRequests - requests.count)
+            self.scheduleMissingDailyPrompts(existingIds: existingDailyIds, maxToSchedule: remainingSlots)
         }
     }
 
@@ -199,7 +204,7 @@ final class NotificationManager {
         }
     }
 
-    private func scheduleMissingDailyPrompts(existingIds: Set<String>) {
+    private func scheduleMissingDailyPrompts(existingIds: Set<String>, maxToSchedule: Int) {
         let center = UNUserNotificationCenter.current()
         let calendar = Calendar.current
         let now = Date()
@@ -207,7 +212,11 @@ final class NotificationManager {
         let window = getDailyPromptWindowMinutes()
         let countPerDay = getDailyPromptCountPerDay()
 
+        var remaining = max(0, maxToSchedule)
+        guard remaining > 0 else { return }
+
         for dayOffset in 0..<rollingDaysToSchedule {
+            if remaining <= 0 { break }
             guard let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: todayStart) else { continue }
             let dayKey = dayId(for: dayStart)
             let fired = firedSlots(for: dayKey)
@@ -236,6 +245,7 @@ final class NotificationManager {
             )
 
             for (index, minuteOfDay) in minutesForDay.enumerated() {
+                if remaining <= 0 { break }
                 // If today's notification already fired (user tapped it), don't schedule it again.
                 if dayOffset == 0 && fired.contains(index) { continue }
 
@@ -262,6 +272,7 @@ final class NotificationManager {
                 let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
                 let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
                 center.add(request, withCompletionHandler: nil)
+                remaining -= 1
             }
         }
     }

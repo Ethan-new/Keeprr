@@ -8,12 +8,38 @@
 import SwiftUI
 import UserNotifications
 
+enum AppAppearance: Int, CaseIterable, Identifiable {
+    case system = 0
+    case light = 1
+    case dark = 2
+    
+    var id: Int { rawValue }
+    
+    var title: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+    
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 struct SettingsView: View {
-    @AppStorage("daily_prompts_enabled_v1") private var dailyPromptsEnabled: Bool = true
+    // Default OFF so we only prompt for notifications after an explicit user action.
+    @AppStorage("daily_prompts_enabled_v1") private var dailyPromptsEnabled: Bool = false
     @AppStorage("daily_prompt_start_minute_v1") private var dailyPromptStartMinute: Int = 9 * 60
     @AppStorage("daily_prompt_end_minute_v1") private var dailyPromptEndMinute: Int = 22 * 60
     @AppStorage("daily_prompt_count_v1") private var dailyPromptCountPerDay: Int = 1
     @AppStorage("front_camera_save_mode_v1") private var frontCameraSaveMode: Int = 0
+    @AppStorage("app_appearance_v1") private var appAppearanceRaw: Int = AppAppearance.system.rawValue
     
     @State private var upcoming: [NotificationManager.ScheduledNotification] = []
     @State private var isLoadingSchedule = false
@@ -36,6 +62,15 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            Section("Appearance") {
+                Picker("Theme", selection: $appAppearanceRaw) {
+                    ForEach(AppAppearance.allCases) { option in
+                        Text(option.title).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+            
             Section("Notifications") {
                 Toggle("Daily photo reminders", isOn: $dailyPromptsEnabled)
                     .onChange(of: dailyPromptsEnabled) { _, newValue in

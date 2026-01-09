@@ -240,8 +240,8 @@ struct AllPhotosView: View {
     }
     
     private func openSettings() {
-        // Avoid UIApplication dependency; this URL opens the app's Settings screen on iOS.
-        if let settingsUrl = URL(string: "app-settings:") {
+        // Use the supported Settings deep link.
+        if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
             openURL(settingsUrl)
         }
     }

@@ -34,6 +34,8 @@ struct CameraView: View {
     @State private var hasUltraWide: Bool = false
     @State private var isReviewingCapture = false
     @State private var secondCaptureIsFront = false
+
+    @State private var cameraAuthStatus: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
     
     private var isUserZoomEnabled: Bool {
         // During the 2-photo capture flow (especially after the auto switch), lock zoom.
@@ -57,29 +59,40 @@ struct CameraView: View {
             ZStack {
                 // Solid black background everywhere (removes any gray safe-area bleed).
                 Color.black.ignoresSafeArea()
-                
-                CustomCameraRepresentable(
-                    frontImage: $frontImage,
-                    backImage: $backImage,
-                    frontAssetId: $frontAssetId,
-                    backAssetId: $backAssetId,
-                    didTapCapture: $didTapCapture,
-                    didTapReverseInt: $didTapReverseInt,
-                    isFront: $isFront,
-                    isCapturing: $isCapturing,
-                    showCountdown: $showCountdown,
-                    countdown: $countdown,
-                    shouldCaptureSecondPhoto: $shouldCaptureSecondPhoto,
-                    zoomFactorBack: $zoomFactorBack,
-                    zoomFactorFront: $zoomFactorFront,
-                    hasUltraWide: $hasUltraWide,
-                    isUserZoomEnabled: Binding(
-                        get: { isUserZoomEnabled },
-                        set: { _ in }
-                    ),
-                    isReviewingCapture: $isReviewingCapture,
-                    secondCaptureIsFront: $secondCaptureIsFront
-                )
+
+                if cameraAuthStatus == .authorized {
+                    CustomCameraRepresentable(
+                        frontImage: $frontImage,
+                        backImage: $backImage,
+                        frontAssetId: $frontAssetId,
+                        backAssetId: $backAssetId,
+                        didTapCapture: $didTapCapture,
+                        didTapReverseInt: $didTapReverseInt,
+                        isFront: $isFront,
+                        isCapturing: $isCapturing,
+                        showCountdown: $showCountdown,
+                        countdown: $countdown,
+                        shouldCaptureSecondPhoto: $shouldCaptureSecondPhoto,
+                        zoomFactorBack: $zoomFactorBack,
+                        zoomFactorFront: $zoomFactorFront,
+                        hasUltraWide: $hasUltraWide,
+                        isUserZoomEnabled: Binding(
+                            get: { isUserZoomEnabled },
+                            set: { _ in }
+                        ),
+                        isReviewingCapture: $isReviewingCapture,
+                        secondCaptureIsFront: $secondCaptureIsFront
+                    )
+                } else if cameraAuthStatus == .notDetermined {
+                    VStack(spacing: 10) {
+                        ProgressView().tint(.white)
+                        Text("Requesting camera access...")
+                            .foregroundColor(.white.opacity(0.85))
+                            .font(.subheadline)
+                    }
+                } else {
+                    cameraPermissionDeniedView
+                }
                 
                 if isReviewingCapture {
                     captureReviewOverlay
@@ -175,8 +188,62 @@ struct CameraView: View {
         .statusBarHidden(true)
         .onAppear {
             Task {
+                await requestCameraAccessIfNeeded()
                 _ = await PhotoAlbumService.shared.requestAuth()
             }
+        }
+    }
+
+    private var cameraPermissionDeniedView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+
+            Text("Camera Access Required")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+
+            Text("Enable camera access in Settings to capture Keeprr moments.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.75))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Text("Open Settings")
+                    .font(.headline)
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .background(Color.white)
+                    .clipShape(Capsule())
+            }
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private func requestCameraAccessIfNeeded() async {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        await MainActor.run {
+            cameraAuthStatus = status
+        }
+
+        guard status == .notDetermined else { return }
+
+        let granted = await withCheckedContinuation { cont in
+            AVCaptureDevice.requestAccess(for: .video) { ok in
+                cont.resume(returning: ok)
+            }
+        }
+        await MainActor.run {
+            cameraAuthStatus = granted ? .authorized : .denied
         }
     }
     

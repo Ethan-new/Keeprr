@@ -49,13 +49,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 @main
 struct KeeprrApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage("app_appearance_v1") private var appAppearanceRaw: Int = AppAppearance.system.rawValue
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onAppear {
-                    NotificationManager.shared.startDailyPromptFlow()
-                }
+                .preferredColorScheme((AppAppearance(rawValue: appAppearanceRaw) ?? .system).colorScheme)
         }
     }
 }
