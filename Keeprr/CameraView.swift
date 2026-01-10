@@ -357,7 +357,11 @@ struct CameraView: View {
     private func saveMomentFromCapture() {
         guard let frontId = frontAssetId, let backId = backAssetId else { return }
         MomentStore.shared.addMoment(frontAssetId: frontId, backAssetId: backId)
-        resetCaptureForRedo()
+        // Switch tabs first so we don't briefly reveal the live camera preview while resetting state.
+        selectedTab = 2 // Keeprr Moments tab
+        DispatchQueue.main.async {
+            resetCaptureForRedo()
+        }
     }
 }
 
